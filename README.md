@@ -1,4 +1,4 @@
-Lightweght FMX Grid.
+Lightweight FMX Grid.
 
 Read only.
 
