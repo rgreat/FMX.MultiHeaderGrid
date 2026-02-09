@@ -385,6 +385,7 @@ type
     property Visible;
     property Width;
     property OnDblClick;
+    property OnResize;
 
     property ColCount: Integer read FColCount write SetColCount default 5;
     property RowCount: Integer read FRowCount write SetRowCount default 10;
