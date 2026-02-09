@@ -41,6 +41,14 @@ type
     procedure SetSelectedFontColor(const Value: TAlphaColor);
     procedure SetParentCol(const Value: Integer);
     procedure SetParentRow(const Value: Integer);
+  private
+    procedure SetCellColorIsSet(const Value: Boolean);
+    procedure SetFontColorIsSet(const Value: Boolean);
+    procedure SetFontNameIsSet(const Value: Boolean);
+    procedure SetFontSizeIsSet(const Value: Boolean);
+    procedure SetFontStyleIsSet(const Value: Boolean);
+    procedure SetSelectedCellColorIsSet(const Value: Boolean);
+    procedure SetSelectedFontColorIsSet(const Value: Boolean);
   public
     class operator Initialize(out Dest: TCellStyle);
 
@@ -60,13 +68,13 @@ type
     procedure SetMergedCell(ParenCol,ParenRow: integer);
     procedure ClearMergedCell;
 
-    property FontNameIsSet: Boolean read FFontNameIsSet write FFontNameIsSet;
-    property FontSizeIsSet: Boolean read FFontSizeIsSet write FFontSizeIsSet;
-    property FontStyleIsSet: Boolean read FFontStyleIsSet write FFontStyleIsSet;
-    property FontColorIsSet: Boolean read FFontColorIsSet write FFontColorIsSet;
-    property CellColorIsSet: Boolean read FCellColorIsSet write FCellColorIsSet;
-    property SelectedCellColorIsSet: Boolean read FSelectedCellColorIsSet write FSelectedCellColorIsSet;
-    property SelectedFontColorIsSet: Boolean read FSelectedFontColorIsSet write FSelectedFontColorIsSet;
+    property FontNameIsSet: Boolean read FFontNameIsSet write SetFontNameIsSet;
+    property FontSizeIsSet: Boolean read FFontSizeIsSet write SetFontSizeIsSet;
+    property FontStyleIsSet: Boolean read FFontStyleIsSet write SetFontStyleIsSet;
+    property FontColorIsSet: Boolean read FFontColorIsSet write SetFontColorIsSet;
+    property CellColorIsSet: Boolean read FCellColorIsSet write SetCellColorIsSet;
+    property SelectedCellColorIsSet: Boolean read FSelectedCellColorIsSet write SetSelectedCellColorIsSet;
+    property SelectedFontColorIsSet: Boolean read FSelectedFontColorIsSet write SetSelectedFontColorIsSet;
   end;
 
   TMergedCell = record
@@ -156,6 +164,8 @@ type
     FDefaultColWidth: integer;
     FDefaultRowHeight: integer;
     FColWidths: array of integer;
+    FColTextVAlignment: array of TTextAlign;
+    FColTextHAlignment: array of TTextAlign;
     FRowData: Array of TRowData;
     FHeaderLevels: THeaderLevels;
     FGridLines: Boolean;
@@ -273,6 +283,10 @@ type
     procedure SetSelectedFontColor(const Value: TAlphaColor);
     procedure SetCellColor(const Value: TAlphaColor);
     procedure SetRowSelect(const Value: Boolean);
+    function GetColTextHAlignment(Index: Integer): TTextAlign;
+    function GetColTextVAlignment(Index: Integer): TTextAlign;
+    procedure SetColTextHAlignment(Index: Integer; const Value: TTextAlign);
+    procedure SetColTextVAlignment(Index: Integer; const Value: TTextAlign);
   protected
     function CanObserve(const ID: Integer): Boolean; override;
 
@@ -322,6 +336,8 @@ type
 
     property ColLefts[Index: Integer]: Integer read GetColLeft;
     property ColWidths[Index: Integer]: Integer read GetColWidth write SetColWidth;
+    property ColTextHAlignment[Index: Integer]: TTextAlign read GetColTextHAlignment write SetColTextHAlignment;
+    property ColTextVAlignment[Index: Integer]: TTextAlign read GetColTextVAlignment write SetColTextVAlignment;
     property RowHeights[Index: Integer]: Integer read GetRowHeight write SetRowHeight;
     property RowTops[Index: Integer]: Integer read GetRowTops;
     property Cells[ACol, ARow: Integer]: string read GetCells write SetCells;
@@ -670,8 +686,12 @@ begin
 
   // Инициализация ширины колонок и высоты строк
   SetLength(FColWidths,FColCount);
+  SetLength(FColTextVAlignment,FColCount);
+  SetLength(FColTextHAlignment,FColCount);
   for I:=0 to FColCount-1 do begin
     FColWidths[i]:=FDefaultColWidth;
+    FColTextVAlignment[i]:=TTextAlign.Center;
+    FColTextHAlignment[i]:=TTextAlign.Leading;
   end;
 
   var Top:=0;
@@ -733,11 +753,19 @@ var
 begin
   if Value<0 then Value:=0;
   if FColCount<>Value then begin
+    var OldValue:=FColCount;
+
     FColCount:=Value;
+
     SetLength(FColWidths,FColCount);
-    for I:=0 to FColCount-1 do begin
+    SetLength(FColTextVAlignment,FColCount);
+    SetLength(FColTextHAlignment,FColCount);
+    for I:=OldValue to FColCount-1 do begin
       FColWidths[i]:=FDefaultColWidth;
+      FColTextVAlignment[i]:=TTextAlign.Center;
+      FColTextHAlignment[i]:=TTextAlign.Leading;
     end;
+
     UpdateSize;
     InvalidateRect(LocalRect);
 
@@ -1305,7 +1333,8 @@ begin
     ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth;
     ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth;
     ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth;
-    Canvas.FillText(ARect, Text, False, 1, [], TTextAlign.Center, TTextAlign.Center);
+
+    Canvas.FillText(ARect, Text, False, 1, [], ColTextHAlignment[ACol], ColTextHAlignment[ARow]);
   end;
 end;
 
@@ -2499,6 +2528,41 @@ begin
   FSelectedFontColorIsSet:=True;
 end;
 
+procedure TCellStyle.SetCellColorIsSet(const Value: Boolean);
+begin
+  FCellColorIsSet:=Value;
+end;
+
+procedure TCellStyle.SetFontColorIsSet(const Value: Boolean);
+begin
+  FFontColorIsSet:=Value;
+end;
+
+procedure TCellStyle.SetFontNameIsSet(const Value: Boolean);
+begin
+  FFontNameIsSet:=Value;
+end;
+
+procedure TCellStyle.SetFontSizeIsSet(const Value: Boolean);
+begin
+  FFontSizeIsSet:=Value;
+end;
+
+procedure TCellStyle.SetFontStyleIsSet(const Value: Boolean);
+begin
+  FFontStyleIsSet:=Value;
+end;
+
+procedure TCellStyle.SetSelectedCellColorIsSet(const Value: Boolean);
+begin
+  FSelectedCellColorIsSet:=Value;
+end;
+
+procedure TCellStyle.SetSelectedFontColorIsSet(const Value: Boolean);
+begin
+  FSelectedFontColorIsSet:=Value;
+end;
+
 { TMultiHeaderStringGrid }
 
 constructor TMultiHeaderStringGrid.Create(AOwner: TComponent);
@@ -2885,6 +2949,40 @@ begin
   if not FLastClickIsOnCell then Exit;
 
   inherited;
+end;
+
+function TMultiHeaderGrid.GetColTextHAlignment(Index: Integer): TTextAlign;
+begin
+  if (Index>=0) and (Index<Length(FColTextHAlignment)) then
+    Result:=FColTextHAlignment[Index]
+  else
+    Result:=TTextAlign.Leading;
+end;
+
+function TMultiHeaderGrid.GetColTextVAlignment(Index: Integer): TTextAlign;
+begin
+  if (Index>=0) and (Index<Length(FColTextVAlignment)) then
+    Result:=FColTextVAlignment[Index]
+  else
+    Result:=TTextAlign.Center;
+end;
+
+procedure TMultiHeaderGrid.SetColTextHAlignment(Index: Integer; const Value: TTextAlign);
+begin
+  if (Index>=0) and (Index<Length(FColTextHAlignment)) and (FColTextHAlignment[Index]<>Value) then begin
+    FColTextHAlignment[Index]:=Value;
+    UpdateSize;
+    InvalidateRect(LocalRect);
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetColTextVAlignment(Index: Integer; const Value: TTextAlign);
+begin
+  if (Index>=0) and (Index<Length(FColTextVAlignment)) and (FColTextVAlignment[Index]<>Value) then begin
+    FColTextVAlignment[Index]:=Value;
+    UpdateSize;
+    InvalidateRect(LocalRect);
+  end;
 end;
 
 end.

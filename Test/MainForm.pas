@@ -96,6 +96,10 @@ begin
   Grid.ColWidths[6] := 100;
   Grid.RowHeights[6] := 80;
 
+  Grid.ColTextHAlignment[6]:=TTextAlign.Center;
+  Grid.ColTextHAlignment[13]:=TTextAlign.Center;
+  Grid.ColTextHAlignment[14]:=TTextAlign.Center;
+
   Grid.CellFont.Size := 10;
   Grid.HeaderFont.Size := 11;
   Grid.HeaderFont.Style := [TFontStyle.fsBold];
