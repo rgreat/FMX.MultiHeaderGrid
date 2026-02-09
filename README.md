@@ -1,4 +1,4 @@
-Lightweight FMX Grid.
+Lightweight Delphi FMX Grid.
 
 Read only.
 
