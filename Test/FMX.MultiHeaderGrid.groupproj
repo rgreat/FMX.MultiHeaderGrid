@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{2029C772-1669-40A4-828E-BA49AFD80B1A}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="..\MultiHeaderGrid.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Test.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="MultiHeaderGrid">
+        <MSBuild Projects="..\MultiHeaderGrid.dproj"/>
+    </Target>
+    <Target Name="MultiHeaderGrid:Clean">
+        <MSBuild Projects="..\MultiHeaderGrid.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MultiHeaderGrid:Make">
+        <MSBuild Projects="..\MultiHeaderGrid.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Test">
+        <MSBuild Projects="Test.dproj"/>
+    </Target>
+    <Target Name="Test:Clean">
+        <MSBuild Projects="Test.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Test:Make">
+        <MSBuild Projects="Test.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="MultiHeaderGrid;Test"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="MultiHeaderGrid:Clean;Test:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="MultiHeaderGrid:Make;Test:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

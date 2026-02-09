@@ -1,0 +1,196 @@
+object Form1: TForm1
+  Left = 0
+  Top = 0
+  Caption = 'TMultiHeaderGrid Test Application'
+  ClientHeight = 484
+  ClientWidth = 699
+  Position = DesktopCenter
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  DesignerMasterStyle = 0
+  object Panel1: TPanel
+    Align = Top
+    Size.Width = 699.000000000000000000
+    Size.Height = 36.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 1
+    object ButtonMergeCells: TButton
+      Position.X = 229.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 83.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 1
+      Text = 'Merge Cells'
+      OnClick = ButtonMergeCellsClick
+    end
+    object ButtonAutoSize: TButton
+      Position.X = 316.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 64.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 2
+      Text = 'AutoSize'
+      OnClick = ButtonAutoSizeClick
+    end
+    object ButtonClearMergeCells: TButton
+      Position.X = 384.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 83.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 3
+      Text = 'Clear Merge'
+      OnClick = ButtonClearMergeCellsClick
+    end
+    object RowCountEdit: TEdit
+      Touch.InteractiveGestures = [LongTap, DoubleTap]
+      TabOrder = 4
+      Text = '0'
+      TextSettings.HorzAlign = Center
+      Position.X = 68.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 81.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      OnChange = RowCountEditChange
+    end
+    object Label1: TLabel
+      Position.X = 9.000000000000000000
+      Position.Y = 9.000000000000000000
+      Size.Width = 57.000000000000000000
+      Size.Height = 17.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'RowCount'
+      TabOrder = 5
+    end
+    object ButtonBenchmark: TButton
+      Position.X = 471.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 68.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 6
+      Text = 'Benchmark'
+      OnClick = ButtonBenchmarkClick
+    end
+    object CheckBox1: TCheckBox
+      Position.X = 545.000000000000000000
+      Position.Y = 8.000000000000000000
+      TabOrder = 7
+      Text = 'Row Select'
+      OnChange = CheckBox1Change
+    end
+    object ButtonFillCells: TButton
+      Position.X = 158.000000000000000000
+      Position.Y = 7.000000000000000000
+      Size.Width = 67.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 0
+      Text = 'Fill Cells'
+      OnClick = ButtonFillCellsClick
+    end
+  end
+  object TabControl1: TTabControl
+    Align = Client
+    Size.Width = 699.000000000000000000
+    Size.Height = 426.000000000000000000
+    Size.PlatformDefault = False
+    TabIndex = 0
+    TabOrder = 3
+    TabPosition = PlatformDefault
+    Sizes = (
+      699s
+      400s
+      699s
+      400s)
+    object TabItem1: TTabItem
+      CustomIcon = <
+        item
+        end>
+      IsSelected = True
+      Size.Width = 115.000000000000000000
+      Size.Height = 26.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'TMultiHeaderGrid'
+      ExplicitSize.cx = 115.000000000000000000
+      ExplicitSize.cy = 26.000000000000000000
+      object Grid1: TMultiHeaderGrid
+        Align = Client
+        Margins.Left = 4.000000000000000000
+        Margins.Top = 4.000000000000000000
+        Margins.Right = 4.000000000000000000
+        Margins.Bottom = 4.000000000000000000
+        Size.Width = 691.000000000000000000
+        Size.Height = 392.000000000000000000
+        Size.PlatformDefault = False
+        DefaultColWidth = 80
+        DefaultRowHeight = 20
+        GridLineColor = claGray
+        GridLineWidth = 1.000000000000000000
+        CellColorAlternate = xFFEDFAFF
+        OnSelectCell = GridSelectCell
+        OnDrawCell = GridDrawCell
+        OnGetCellText = Grid1GetCellText
+        OnSetCellText = Grid1SetCellText
+        OnGetCellStyle = Grid1GetCellStyle
+        OnSetCellStyle = Grid1SetCellStyle
+        OnGridScroll = GridGridScroll
+      end
+    end
+    object TabItem2: TTabItem
+      CustomIcon = <
+        item
+        end>
+      IsSelected = False
+      Size.Width = 146.000000000000000000
+      Size.Height = 26.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'TMultiHeaderStringGrid'
+      ExplicitSize.cx = 146.000000000000000000
+      ExplicitSize.cy = 26.000000000000000000
+      object Grid2: TMultiHeaderStringGrid
+        Align = Client
+        Margins.Left = 4.000000000000000000
+        Margins.Top = 4.000000000000000000
+        Margins.Right = 4.000000000000000000
+        Margins.Bottom = 4.000000000000000000
+        Size.Width = 691.000000000000000000
+        Size.Height = 392.000000000000000000
+        Size.PlatformDefault = False
+        DefaultColWidth = 80
+        DefaultRowHeight = 20
+        GridLineColor = claGray
+        GridLineWidth = 1.000000000000000000
+        CellColorAlternate = xFFEDFAFF
+        OnSelectCell = GridSelectCell
+        OnDrawCell = GridDrawCell
+      end
+    end
+  end
+  object StatusBar1: TStatusBar
+    Position.Y = 462.000000000000000000
+    ShowSizeGrip = True
+    Size.Width = 699.000000000000000000
+    Size.Height = 22.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 2
+    object StatusText: TLabel
+      Align = Client
+      Margins.Left = 3.000000000000000000
+      Size.Width = 696.000000000000000000
+      Size.Height = 22.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'RowCount'
+      TabOrder = 3
+    end
+  end
+end
