@@ -43,6 +43,7 @@ type
     procedure GridGridScroll(Sender: TObject; Left, Top: Integer);
     procedure RowCountEditChange(Sender: TObject);
     procedure ButtonFillCellsClick(Sender: TObject);
+    procedure GridDblClick(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -366,6 +367,12 @@ begin
   FillGrid(Grid2);
   Grid1.Repaint;
   Grid2.Repaint;
+end;
+
+procedure TForm1.GridDblClick(Sender: TObject);
+begin
+  var Grid:=ActiveGrid;
+  ShowMessage(Grid.Cells[Grid.Col,Grid.Row]);
 end;
 
 end.

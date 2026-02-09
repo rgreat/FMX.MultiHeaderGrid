@@ -209,6 +209,7 @@ type
     FOnHeaderResized: TRowResizedEvent;
     FOnRowResized: TRowResizedEvent;
     FOnGridScroll: TGridScrollEvent;
+    FLastClickIsOnCell: boolean;
 
     FRowSelect: Boolean;
 
@@ -288,6 +289,8 @@ type
     procedure DoCellClick(ACol, ARow: Integer); virtual;
     procedure DoHeaderClick(ALevel, ACol: Integer); virtual;
 
+    procedure DblClick; override;
+
     procedure DoColumnResized; virtual;
     procedure DoHeaderRowResized; virtual;
     procedure DoRowResized; virtual;
@@ -365,6 +368,7 @@ type
     property TabStop;
     property Visible;
     property Width;
+    property OnDblClick;
 
     property ColCount: Integer read FColCount write SetColCount default 5;
     property RowCount: Integer read FRowCount write SetRowCount default 10;
@@ -1852,6 +1856,8 @@ var
 begin
   inherited;
 
+  FLastClickIsOnCell:=False;
+
  // Устанавливаем фокус при клике
   if CanFocus and (Button=TMouseButton.mbLeft) then begin
     SetFocus; // Устанавливаем фокус
@@ -1916,6 +1922,7 @@ begin
         for I:=0 to FColCount-1 do begin
           Rect:=GetCellRect(I, J);
           if Rect.Contains(PointF(X, Y)) then begin
+            FLastClickIsOnCell:=True;
             FSelectedCell:=Point(I, J);
             DoCellClick(FSelectedCell.X, FSelectedCell.Y);
             ScrollToSelectedCell;
@@ -2871,6 +2878,13 @@ begin
     FRowSelect:=Value;
     InvalidateRect(LocalRect);
   end;
+end;
+
+procedure TMultiHeaderGrid.DblClick;
+begin
+  if not FLastClickIsOnCell then Exit;
+
+  inherited;
 end;
 
 end.

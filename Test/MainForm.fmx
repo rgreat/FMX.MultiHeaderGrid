@@ -130,6 +130,7 @@ object Form1: TForm1
         Size.Width = 691.000000000000000000
         Size.Height = 392.000000000000000000
         Size.PlatformDefault = False
+        OnDblClick = GridDblClick
         DefaultColWidth = 80
         DefaultRowHeight = 20
         GridLineColor = claGray
