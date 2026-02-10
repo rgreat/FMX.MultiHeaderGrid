@@ -353,6 +353,8 @@ type
     procedure AutoSizeCols(ForcePrecise: boolean = False);
     procedure AutoSize(ForcePrecise: boolean = False);
 
+    procedure ClearSelection;
+
     property ColLefts[Index: Integer]: Integer read GetColLeft;
     property ColWidths[Index: Integer]: Integer read GetColWidth write SetColWidth;
     property ColTextHAlignment[Index: Integer]: TTextAlign read GetColTextHAlignment write SetColTextHAlignment;
@@ -3093,6 +3095,11 @@ begin
   end;
 end;
 
+
+procedure TMultiHeaderGrid.ClearSelection;
+begin
+  SelectedCell:=Point(-1,-1);
+end;
 
 end.
 
