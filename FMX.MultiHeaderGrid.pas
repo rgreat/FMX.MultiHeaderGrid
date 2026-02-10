@@ -1149,9 +1149,6 @@ end;
 procedure TMultiHeaderGrid.Paint;
 var
   Canvas: TCanvas;
-  I: Integer;
-  ResizeRect: TRectF;
-  CellRect: TRectF;
 begin
   Canvas:=Self.Canvas;
 
@@ -1192,7 +1189,6 @@ end;
 procedure TMultiHeaderGrid.DrawHeaders(Canvas: TCanvas);
 var
   I, J: Integer;
-  Rect: TRectF;
 begin
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
@@ -1557,7 +1553,7 @@ begin
   if not Style.IsMergedCell then Exit;
 
   for var Y:=Style.ParentRow to FRowCount-1 do begin
-    var IsMergedCell:=False;
+    var IsMergedCell: Boolean;
     for var X:=Style.ParentCol to FColCount-1 do begin
       var TmpStyle:=CellStyle[X,Y];
       IsMergedCell:=TmpStyle.IsMergedCell and (TmpStyle.ParentCol=Style.ParentCol) and (TmpStyle.ParentRow=Style.ParentRow);
