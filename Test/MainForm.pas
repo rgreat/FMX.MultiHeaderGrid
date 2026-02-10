@@ -230,6 +230,10 @@ begin
     for var i:=0 to TH do Text:=Text+#13#10+'Строка '+(I+2).ToString;
 
     Grid.MergeCells(L,T,W,H,Text);
+
+    var CellStyle:=Grid.CellStyle[L,T];
+    CellStyle.TextHAlignment:=TTextAlign.Center;
+    Grid.CellStyle[L,T]:=CellStyle;
   end;
   Grid.Repaint;
 end;

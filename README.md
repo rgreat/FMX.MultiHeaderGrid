@@ -1,4 +1,4 @@
-Lightweight Delphi FMX Grid.
+Lightweight Delphi FMX VCL-like Grid.
 
 Read only.
 

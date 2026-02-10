@@ -17,9 +17,10 @@ type
     FCellColor              : TAlphaColor;
     FFontName               : string;
     FFontColor              : TAlphaColor;
+    FTextVAlignment         : TTextAlign;
+    FTextHAlignment         : TTextAlign;
     FSelectedCellColor      : TAlphaColor;
     FSelectedFontColor      : TAlphaColor;
-
     FParentCol              : Integer;
     FParentRow              : Integer;
 
@@ -28,6 +29,8 @@ type
     FCellColorIsSet         : Boolean;
     FFontNameIsSet          : Boolean;
     FFontColorIsSet         : Boolean;
+    FTextVAlignmentIsSet    : Boolean;
+    FTextHAlignmentIsSet    : Boolean;
     FSelectedCellColorIsSet : Boolean;
     FSelectedFontColorIsSet : Boolean;
     FIsMergedCell           : Boolean;
@@ -41,7 +44,6 @@ type
     procedure SetSelectedFontColor(const Value: TAlphaColor);
     procedure SetParentCol(const Value: Integer);
     procedure SetParentRow(const Value: Integer);
-  private
     procedure SetCellColorIsSet(const Value: Boolean);
     procedure SetFontColorIsSet(const Value: Boolean);
     procedure SetFontNameIsSet(const Value: Boolean);
@@ -49,32 +51,46 @@ type
     procedure SetFontStyleIsSet(const Value: Boolean);
     procedure SetSelectedCellColorIsSet(const Value: Boolean);
     procedure SetSelectedFontColorIsSet(const Value: Boolean);
+    procedure SetTextHAlignment(const Value: TTextAlign);
+    procedure SetTextHAlignmentIsSet(const Value: Boolean);
+    procedure SetTextVAlignment(const Value: TTextAlign);
+    procedure SetTextVAlignmentIsSet(const Value: Boolean);
   public
     class operator Initialize(out Dest: TCellStyle);
 
     function IsEmpty: boolean;
 
+    property IsMergedCell: Boolean read FIsMergedCell;
+    procedure SetMergedCell(ParenCol,ParenRow: integer);
+    procedure ClearMergedCell;
+
     property FontName: string read FFontName write SetFontName;
     property FontSize: Single read FFontSize write SetFontSize;
     property FontStyle: TFontStyles read FFontStyle write SetFontStyle;
     property FontColor: TAlphaColor read FFontColor write SetFontColor;
+
     property CellColor: TAlphaColor read FCellColor write SetCellColor;
+
     property SelectedFontColor: TAlphaColor read FSelectedFontColor write SetSelectedFontColor;
     property SelectedCellColor: TAlphaColor read FSelectedCellColor write SetSelectedCellColor;
 
-    property ParentCol: Integer read FParentCol write SetParentCol;
-    property ParentRow: Integer read FParentRow write SetParentRow;
-    property IsMergedCell: Boolean read FIsMergedCell;
-    procedure SetMergedCell(ParenCol,ParenRow: integer);
-    procedure ClearMergedCell;
+    property TextVAlignment: TTextAlign read FTextVAlignment write SetTextVAlignment;
+    property TextHAlignment: TTextAlign read FTextHAlignment write SetTextHAlignment;
 
     property FontNameIsSet: Boolean read FFontNameIsSet write SetFontNameIsSet;
     property FontSizeIsSet: Boolean read FFontSizeIsSet write SetFontSizeIsSet;
     property FontStyleIsSet: Boolean read FFontStyleIsSet write SetFontStyleIsSet;
     property FontColorIsSet: Boolean read FFontColorIsSet write SetFontColorIsSet;
     property CellColorIsSet: Boolean read FCellColorIsSet write SetCellColorIsSet;
+
+    property TextVAlignmentIsSet: Boolean read FTextVAlignmentIsSet write SetTextVAlignmentIsSet;
+    property TextHAlignmentIsSet: Boolean read FTextHAlignmentIsSet write SetTextHAlignmentIsSet;
+
     property SelectedCellColorIsSet: Boolean read FSelectedCellColorIsSet write SetSelectedCellColorIsSet;
     property SelectedFontColorIsSet: Boolean read FSelectedFontColorIsSet write SetSelectedFontColorIsSet;
+
+    property ParentCol: Integer read FParentCol write SetParentCol;
+    property ParentRow: Integer read FParentRow write SetParentRow;
   end;
 
   TMergedCell = record
@@ -242,7 +258,9 @@ type
     procedure SetColWidth(Index: Integer; const Value: Integer);
     function GetRowHeight(Index: Integer): Integer;
     procedure SetRowHeight(Index: Integer; const Value: Integer);
-    function GetCellRect(ACol, ARow: Integer): TRectF;
+    function GetCellRect(ACol, ARow: Integer): TRectF; overload;
+    function GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF; overload;
+    function GetMergedCellRect(ACol, ARow: Integer): TRectF;
     function GetHeaderRect(ALevel, ACol: Integer): TRectF;
     procedure DrawGridLines(Canvas: TCanvas);
     procedure DrawCells(Canvas: TCanvas);
@@ -313,6 +331,7 @@ type
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Single); override;
     procedure MouseMove(Shift: TShiftState; X, Y: Single); override;
     procedure MouseUp(Button: TMouseButton; Shift: TShiftState; X, Y: Single); override;
+    procedure MouseWheel(Shift: TShiftState; WheelDelta: Integer; var Handled: Boolean); override;
 
     procedure KeyDown(var Key: Word; var KeyChar: WideChar; Shift: TShiftState); override;
 
@@ -942,6 +961,43 @@ begin
   DoGetCellStyle(ACol, ARow, Result);
 end;
 
+function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF;
+var
+  X, Y: Single;
+  I: Integer;
+begin
+  // Проверяем валидность диапазона
+  if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
+    Exit(Default(TRectF));
+
+  X:=FGridLineWidth-ViewLeft;
+  Y:=FGridLineWidth+HeaderHeight-ViewTop;
+
+  // Вычисляем позицию колонки
+  for I:=0 to ACol-1 do
+    X:=X+GetColWidth(I);
+
+  // Вычисляем позицию строки
+  Y:=Y+FRowData[ARow].Top;
+
+  var MergedCell: TMergedCell;
+  AIsMergedCell:=IsMergedCell(ACol,ARow,MergedCell);
+
+  if IsMergedCell(ACol,ARow,MergedCell) then begin
+    // Корректируем прямоугольник для объединенной ячейки
+    Result.Left:=X;
+    Result.Top:=Y;
+    Result.Right:=Result.Left;
+    Result.Bottom:=Result.Top;
+    for var K:=0 to MergedCell.ColSpan-1 do
+      Result.Right:=Result.Right+GetColWidth(MergedCell.Col+K);
+    for var K:=0 to MergedCell.RowSpan-1 do
+      Result.Bottom:=Result.Bottom+GetRowHeight(MergedCell.Row+K);
+  end else begin
+    Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
+  end;
+end;
+
 function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer): TRectF;
 var
   X, Y: Single;
@@ -962,6 +1018,13 @@ begin
   Y:=Y+FRowData[ARow].Top;
 
   Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
+end;
+
+
+function TMultiHeaderGrid.GetMergedCellRect(ACol, ARow: Integer): TRectF;
+begin
+  var IsMergedCell: boolean;
+  Result:=GetCellRect(ACol,ARow,IsMergedCell);
 end;
 
 function TMultiHeaderGrid.HeaderHeight: Integer;
@@ -1176,12 +1239,21 @@ begin
     Canvas.Font.Style:=Element.Style.FontStyle;
   end;
 
+  var HAlignment:=TTextAlign.Center;
+  if Element.Style.TextHAlignmentIsSet then begin
+    HAlignment:=Element.Style.TextHAlignment;
+  end;
+  var VAlignment:=TTextAlign.Center;
+  if Element.Style.TextVAlignmentIsSet then begin
+    HAlignment:=Element.Style.TextVAlignment;
+  end;
+
   if Element.Style.FontColorIsSet then begin
     Canvas.Fill.Color:=Element.Style.FontColor;
   end else begin
     Canvas.Fill.Color:=FCellFontColor;
   end;
-  Canvas.FillText(ARect, Element.Caption, False, 1, [], TTextAlign.Center, TTextAlign.Center);
+  Canvas.FillText(ARect, Element.Caption, False, 1, [], HAlignment, VAlignment);
 
   // Границы
   Canvas.DrawRect(ARect, 0, 0, AllCorners, 1);
@@ -1313,6 +1385,15 @@ begin
       Canvas.Font.Style:=CellStyle.FontStyle;
     end;
 
+    var HAlignment:=ColTextHAlignment[ACol];
+    if CellStyle.TextHAlignmentIsSet then begin
+      HAlignment:=CellStyle.TextHAlignment;
+    end;
+    var VAlignment:=ColTextVAlignment[ACol];
+    if CellStyle.TextVAlignmentIsSet then begin
+      HAlignment:=CellStyle.TextVAlignment;
+    end;
+
     if IsSelected then begin
       // Выделенная ячейка
       if CellStyle.SelectedFontColorIsSet then begin
@@ -1335,7 +1416,7 @@ begin
     ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth;
     ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth;
 
-    Canvas.FillText(ARect, Text, False, 1, [], ColTextHAlignment[ACol], ColTextHAlignment[ARow]);
+    Canvas.FillText(ARect, Text, False, 1, [], HAlignment, VAlignment);
   end;
 end;
 
@@ -1838,20 +1919,7 @@ procedure TMultiHeaderGrid.ScrollToSelectedCell;
 begin
   if (FSelectedCell.X>=0) and (FSelectedCell.Y>=0) then begin
 
-    var Rect: TRectF;
-    var MergedCell: TMergedCell;
-    if IsMergedCell(FSelectedCell.X,FSelectedCell.Y,MergedCell) then begin
-      Rect:=GetCellRect(MergedCell.Col, MergedCell.Row);
-      // Корректируем прямоугольник для объединенной ячейки
-      Rect.Right:=Rect.Left;
-      Rect.Bottom:=Rect.Top;
-      for var K:=0 to MergedCell.ColSpan-1 do
-        Rect.Right:=Rect.Right+GetColWidth(MergedCell.Col+K);
-      for var K:=0 to MergedCell.RowSpan-1 do
-        Rect.Bottom:=Rect.Bottom+GetRowHeight(MergedCell.Row+K);
-    end else begin
-      Rect:=GetCellRect(FSelectedCell.X,FSelectedCell.Y);
-    end;
+    var Rect:=GetMergedCellRect(FSelectedCell.X,FSelectedCell.Y);
     Rect.Offset(ViewLeft,ViewTop-HeaderHeight);
 
     if Rect.Left<ViewLeft then begin
@@ -2033,6 +2101,27 @@ begin
   end;
 end;
 
+procedure TMultiHeaderGrid.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
+  var Handled: Boolean);
+begin
+  inherited;
+  if Handled then Exit;
+
+  var WheelDeltaDivider:=2.0;
+  if ssShift in Shift then begin
+    WheelDeltaDivider:=0.5;
+  end;
+
+  WheelDelta:=-Max(1,round(Abs(WheelDelta/WheelDeltaDivider)))*Sign(WheelDelta);
+
+  if ssHorizontal in Shift then begin
+    ViewLeft:=ViewLeft+WheelDelta;
+  end else begin
+    ViewTop:=Min(ViewTop+WheelDelta,FullTableHeight);
+  end;
+  InvalidateRect(LocalRect);
+end;
+
 procedure CopyTextToClipboard(const AText: string);
 var
   ClipboardService: IFMXClipboardService;
@@ -2051,9 +2140,7 @@ var
   OldCol, OldRow   : Integer;
   MergedCellOld    : TMergedCell;
   MergedCellNew    : TMergedCell;
-  Handled          : Boolean;
 begin
-  Handled:=False;
 
   if IsFocused then
   begin
@@ -2063,35 +2150,27 @@ begin
     case Key of
       vkLeft: begin
         DX:=-1;
-        Handled:=True;
       end;
       vkRight: begin
         DX:=1;
-        Handled:=True;
       end;
       vkUp: begin
         DY:=-1;
-        Handled:=True;
       end;
       vkDown: begin
         DY:=1;
-        Handled:=True;
       end;
       vkHome: begin
         DY:=-RowCount;
-        Handled:=True;
       end;
       vkEnd: begin
         DY:=RowCount;
-        Handled:=True;
       end;
       vkPrior: begin  // Page Up
         DY:=-Trunc(ViewCellsHeight/DefaultRowHeight);
-        Handled:=True;
       end;
       vkNext: begin   // Page Down
         DY:=Trunc(ViewCellsHeight/DefaultRowHeight);
-        Handled:=True;
       end;
       vkReturn: begin // Enter
         DoCellClick(FSelectedCell.X, FSelectedCell.Y);
@@ -2400,7 +2479,9 @@ begin
   var BottomCellTop:=FRowData[High(FRowData)].Top;
   FViewTop:=Min(BottomCellTop,Max(0,Value));
 
+  VScrollBar.BeginUpdate;
   VScrollBar.Value:=Value;
+  VScrollBar.EndUpdate;
 
   DoGridScroll;
 
@@ -2562,6 +2643,28 @@ end;
 procedure TCellStyle.SetSelectedFontColorIsSet(const Value: Boolean);
 begin
   FSelectedFontColorIsSet:=Value;
+end;
+
+procedure TCellStyle.SetTextHAlignment(const Value: TTextAlign);
+begin
+  FTextHAlignment:=Value;
+  FTextHAlignmentIsSet:=True;
+end;
+
+procedure TCellStyle.SetTextHAlignmentIsSet(const Value: Boolean);
+begin
+  FTextHAlignmentIsSet:=Value;
+end;
+
+procedure TCellStyle.SetTextVAlignment(const Value: TTextAlign);
+begin
+  FTextVAlignment:=Value;
+  FTextVAlignmentIsSet:=True;
+end;
+
+procedure TCellStyle.SetTextVAlignmentIsSet(const Value: Boolean);
+begin
+  FTextVAlignmentIsSet:=Value;
 end;
 
 { TMultiHeaderStringGrid }
@@ -2889,7 +2992,11 @@ begin
 
   // Обновляем вертикальную прокрутку
   if Assigned(VScrollBar) then
+  begin
+    VScrollBar.BeginUpdate;
     VScrollBar.Value := FViewTop;
+    VScrollBar.EndUpdate;
+  end;
 end;
 
 procedure TMultiHeaderGrid.UpdateRowHeight(ARow: Integer; NewHeight: Integer);
@@ -2902,7 +3009,11 @@ begin
 
   // Обновляем вертикальную прокрутку
   if Assigned(VScrollBar) then
+  begin
+    VScrollBar.BeginUpdate;
     VScrollBar.Value := FViewTop;
+    VScrollBar.EndUpdate;
+  end;
 end;
 
 procedure TMultiHeaderGrid.DoColumnResized;
@@ -2985,6 +3096,7 @@ begin
     InvalidateRect(LocalRect);
   end;
 end;
+
 
 end.
 
