@@ -4,11 +4,25 @@ interface
 
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
-  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts;
+  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects,
+  FMX.InertialMovement, FMX.Layouts;
 
 type
   THeaderLevel = class;
   THeaderLevels = class;
+  TMultiHeaderGrid = class;
+
+  TScrollCalculations = class(TAniCalculations)
+  private
+    [Weak] FGrid: TMultiHeaderGrid;
+  protected
+    procedure DoChanged; override;
+    procedure DoStart; override;
+    procedure DoStop; override;
+  public
+    constructor Create(AOwner: TPersistent); override;
+    property Grid: TMultiHeaderGrid read FGrid;
+  end;
 
   TCellStyle = record
   strict private
@@ -17,10 +31,9 @@ type
     FCellColor              : TAlphaColor;
     FFontName               : string;
     FFontColor              : TAlphaColor;
-    FTextVAlignment         : TTextAlign;
-    FTextHAlignment         : TTextAlign;
     FSelectedCellColor      : TAlphaColor;
     FSelectedFontColor      : TAlphaColor;
+
     FParentCol              : Integer;
     FParentRow              : Integer;
 
@@ -29,8 +42,6 @@ type
     FCellColorIsSet         : Boolean;
     FFontNameIsSet          : Boolean;
     FFontColorIsSet         : Boolean;
-    FTextVAlignmentIsSet    : Boolean;
-    FTextHAlignmentIsSet    : Boolean;
     FSelectedCellColorIsSet : Boolean;
     FSelectedFontColorIsSet : Boolean;
     FIsMergedCell           : Boolean;
@@ -44,6 +55,7 @@ type
     procedure SetSelectedFontColor(const Value: TAlphaColor);
     procedure SetParentCol(const Value: Integer);
     procedure SetParentRow(const Value: Integer);
+  private
     procedure SetCellColorIsSet(const Value: Boolean);
     procedure SetFontColorIsSet(const Value: Boolean);
     procedure SetFontNameIsSet(const Value: Boolean);
@@ -51,46 +63,32 @@ type
     procedure SetFontStyleIsSet(const Value: Boolean);
     procedure SetSelectedCellColorIsSet(const Value: Boolean);
     procedure SetSelectedFontColorIsSet(const Value: Boolean);
-    procedure SetTextHAlignment(const Value: TTextAlign);
-    procedure SetTextHAlignmentIsSet(const Value: Boolean);
-    procedure SetTextVAlignment(const Value: TTextAlign);
-    procedure SetTextVAlignmentIsSet(const Value: Boolean);
   public
     class operator Initialize(out Dest: TCellStyle);
 
     function IsEmpty: boolean;
 
-    property IsMergedCell: Boolean read FIsMergedCell;
-    procedure SetMergedCell(ParenCol,ParenRow: integer);
-    procedure ClearMergedCell;
-
     property FontName: string read FFontName write SetFontName;
     property FontSize: Single read FFontSize write SetFontSize;
     property FontStyle: TFontStyles read FFontStyle write SetFontStyle;
     property FontColor: TAlphaColor read FFontColor write SetFontColor;
-
     property CellColor: TAlphaColor read FCellColor write SetCellColor;
-
     property SelectedFontColor: TAlphaColor read FSelectedFontColor write SetSelectedFontColor;
     property SelectedCellColor: TAlphaColor read FSelectedCellColor write SetSelectedCellColor;
 
-    property TextVAlignment: TTextAlign read FTextVAlignment write SetTextVAlignment;
-    property TextHAlignment: TTextAlign read FTextHAlignment write SetTextHAlignment;
+    property ParentCol: Integer read FParentCol write SetParentCol;
+    property ParentRow: Integer read FParentRow write SetParentRow;
+    property IsMergedCell: Boolean read FIsMergedCell;
+    procedure SetMergedCell(ParenCol,ParenRow: integer);
+    procedure ClearMergedCell;
 
     property FontNameIsSet: Boolean read FFontNameIsSet write SetFontNameIsSet;
     property FontSizeIsSet: Boolean read FFontSizeIsSet write SetFontSizeIsSet;
     property FontStyleIsSet: Boolean read FFontStyleIsSet write SetFontStyleIsSet;
     property FontColorIsSet: Boolean read FFontColorIsSet write SetFontColorIsSet;
     property CellColorIsSet: Boolean read FCellColorIsSet write SetCellColorIsSet;
-
-    property TextVAlignmentIsSet: Boolean read FTextVAlignmentIsSet write SetTextVAlignmentIsSet;
-    property TextHAlignmentIsSet: Boolean read FTextHAlignmentIsSet write SetTextHAlignmentIsSet;
-
     property SelectedCellColorIsSet: Boolean read FSelectedCellColorIsSet write SetSelectedCellColorIsSet;
     property SelectedFontColorIsSet: Boolean read FSelectedFontColorIsSet write SetSelectedFontColorIsSet;
-
-    property ParentCol: Integer read FParentCol write SetParentCol;
-    property ParentRow: Integer read FParentRow write SetParentRow;
   end;
 
   TMergedCell = record
@@ -139,8 +137,6 @@ type
 
     property Height: Integer read FHeight write SetHeight;
   end;
-
-  TMultiHeaderGrid = class;
 
   THeaderLevels = class(TObjectList<THeaderLevel>)
     Grid : TMultiHeaderGrid;
@@ -238,6 +234,8 @@ type
     FLastClickIsOnCell: boolean;
 
     FRowSelect: Boolean;
+    FAniCalculations: TScrollCalculations;
+    FInInternalScroll: Boolean;
 
     function ResizeStartWidth: Integer;
 
@@ -258,9 +256,7 @@ type
     procedure SetColWidth(Index: Integer; const Value: Integer);
     function GetRowHeight(Index: Integer): Integer;
     procedure SetRowHeight(Index: Integer; const Value: Integer);
-    function GetCellRect(ACol, ARow: Integer): TRectF; overload;
-    function GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF; overload;
-    function GetMergedCellRect(ACol, ARow: Integer): TRectF;
+    function GetCellRect(ACol, ARow: Integer): TRectF;
     function GetHeaderRect(ALevel, ACol: Integer): TRectF;
     procedure DrawGridLines(Canvas: TCanvas);
     procedure DrawCells(Canvas: TCanvas);
@@ -305,9 +301,16 @@ type
     function GetColTextVAlignment(Index: Integer): TTextAlign;
     procedure SetColTextHAlignment(Index: Integer; const Value: TTextAlign);
     procedure SetColTextVAlignment(Index: Integer; const Value: TTextAlign);
+    function CreateAniCalculations: TScrollCalculations;
+    procedure StartScrolling;
+    procedure StopScrolling;
+    procedure UpdateAniViewport;
+    function GetSceneScale: Single;
+    procedure UpdateAnimationTargets(const ContentLayoutRect: TRectF);
+    function CalcContentLayoutRect: TRectF;
   protected
     function CanObserve(const ID: Integer): Boolean; override;
-
+    function ContentSize: TSize;
     procedure Paint; override;
     procedure Resize; override;
     procedure DoSelectCell; virtual;
@@ -352,8 +355,6 @@ type
     procedure AutoSizeRows(ForcePrecise: boolean = False);
     procedure AutoSizeCols(ForcePrecise: boolean = False);
     procedure AutoSize(ForcePrecise: boolean = False);
-
-    procedure ClearSelection;
 
     property ColLefts[Index: Integer]: Integer read GetColLeft;
     property ColWidths[Index: Integer]: Integer read GetColWidth write SetColWidth;
@@ -478,7 +479,7 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform;
+  System.SysUtils, System.RTLConsts, System.Math, FMX.ScrollBox, FMX.Platform;
 
 procedure Register;
 begin
@@ -738,6 +739,13 @@ begin
   FResizeEndColumnIndex:=-1;
   FResizeRowIndex:=-1;
   FResizeMargin:=3;
+  FAniCalculations := CreateAniCalculations;
+  FAniCalculations.Animation := True;
+end;
+
+function TMultiHeaderGrid.CreateAniCalculations: TScrollCalculations;
+begin
+  Result := TScrollCalculations.Create(Self);
 end;
 
 destructor TMultiHeaderGrid.Destroy;
@@ -900,7 +908,7 @@ end;
 
 function TMultiHeaderGrid.FullTableWidth: Integer;
 begin
-  Result:=round(GridLineWidth/2);
+  Result:=round(2*GridLineWidth);
   for var i:=0 to FColCount-1 do begin
     Result:=Result+FColWidths[i];
   end;
@@ -963,43 +971,6 @@ begin
   DoGetCellStyle(ACol, ARow, Result);
 end;
 
-function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF;
-var
-  X, Y: Single;
-  I: Integer;
-begin
-  // Проверяем валидность диапазона
-  if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
-    Exit(Default(TRectF));
-
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
-
-  // Вычисляем позицию колонки
-  for I:=0 to ACol-1 do
-    X:=X+GetColWidth(I);
-
-  // Вычисляем позицию строки
-  Y:=Y+FRowData[ARow].Top;
-
-  var MergedCell: TMergedCell;
-  AIsMergedCell:=IsMergedCell(ACol,ARow,MergedCell);
-
-  if IsMergedCell(ACol,ARow,MergedCell) then begin
-    // Корректируем прямоугольник для объединенной ячейки
-    Result.Left:=X;
-    Result.Top:=Y;
-    Result.Right:=Result.Left;
-    Result.Bottom:=Result.Top;
-    for var K:=0 to MergedCell.ColSpan-1 do
-      Result.Right:=Result.Right+GetColWidth(MergedCell.Col+K);
-    for var K:=0 to MergedCell.RowSpan-1 do
-      Result.Bottom:=Result.Bottom+GetRowHeight(MergedCell.Row+K);
-  end else begin
-    Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
-  end;
-end;
-
 function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer): TRectF;
 var
   X, Y: Single;
@@ -1009,8 +980,8 @@ begin
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
+  X:=FGridLineWidth-ViewLeft;
+  Y:=FGridLineWidth+HeaderHeight-ViewTop;
 
   // Вычисляем позицию колонки
   for I:=0 to ACol-1 do
@@ -1022,16 +993,9 @@ begin
   Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
 end;
 
-
-function TMultiHeaderGrid.GetMergedCellRect(ACol, ARow: Integer): TRectF;
-begin
-  var IsMergedCell: boolean;
-  Result:=GetCellRect(ACol,ARow,IsMergedCell);
-end;
-
 function TMultiHeaderGrid.HeaderHeight: Integer;
 begin
-  Result:=round(FGridLineWidth/2);
+  Result:=round(FGridLineWidth);
 
   // Добавляем высоту заголовков
   for var I:=0 to FHeaderLevels.Count-1 do
@@ -1046,8 +1010,8 @@ var
   ActualColSpan : Integer;
   ActualRowSpan : Integer;
 begin
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2;
+  X:=FGridLineWidth-ViewLeft;
+  Y:=FGridLineWidth;
 
   // Вычисляем позицию уровня заголовка
   for i:=0 to ALevel-1 do begin
@@ -1084,6 +1048,11 @@ begin
   end;
 end;
 
+function TMultiHeaderGrid.CalcContentLayoutRect: TRectF;
+begin
+  Result := TRectF.Create(0, 0, Width, Height);
+end;
+
 procedure TMultiHeaderGrid.UpdateSize;
 begin
   if (FColCount+FRowCount>0) and (ViewPortHeight<FullTableHeight) then begin
@@ -1111,6 +1080,8 @@ begin
     HScrollPanel.Visible:=False;
     HScrollBar.OnChange:=nil;
   end;
+
+  UpdateAnimationTargets(CalcContentLayoutRect);
 end;
 
 function TMultiHeaderGrid.ViewCellsHeight: Integer;
@@ -1137,15 +1108,31 @@ begin
 end;
 
 procedure TMultiHeaderGrid.VScrollBarChange(Sender: TObject);
+var
+  LScale, X, Y: Double;
 begin
   ViewTop:=Round(VScrollBar.Value);
   InvalidateRect(LocalRect);
+  if FInInternalScroll then
+    Exit;
+  LScale := GetSceneScale;
+  X := FAniCalculations.ViewportPosition.X;
+  Y := ViewTop;
+  FAniCalculations.ViewportPosition := TPointD.Create(Round(X * LScale) / LScale, Round(Y * LScale) / LScale);
 end;
 
 procedure TMultiHeaderGrid.HScrollBarChange(Sender: TObject);
+var
+  LScale, X, Y: Double;
 begin
   ViewLeft:=Round(HScrollBar.Value);
   InvalidateRect(LocalRect);
+  if FInInternalScroll then
+    Exit;
+  LScale := GetSceneScale;
+  X := ViewLeft;
+  Y := FAniCalculations.ViewportPosition.Y;
+  FAniCalculations.ViewportPosition := TPointD.Create(Round(X * LScale) / LScale, Round(Y * LScale) / LScale);
 end;
 
 procedure TMultiHeaderGrid.Paint;
@@ -1194,7 +1181,7 @@ var
 begin
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
-  Canvas.Stroke.Thickness:=FGridLineWidth/2;
+  Canvas.Stroke.Thickness:=FGridLineWidth;
 
   for i:=0 to FHeaderLevels.Count-1 do begin
     J:=0;
@@ -1237,21 +1224,12 @@ begin
     Canvas.Font.Style:=Element.Style.FontStyle;
   end;
 
-  var HAlignment:=TTextAlign.Center;
-  if Element.Style.TextHAlignmentIsSet then begin
-    HAlignment:=Element.Style.TextHAlignment;
-  end;
-  var VAlignment:=TTextAlign.Center;
-  if Element.Style.TextVAlignmentIsSet then begin
-    HAlignment:=Element.Style.TextVAlignment;
-  end;
-
   if Element.Style.FontColorIsSet then begin
     Canvas.Fill.Color:=Element.Style.FontColor;
   end else begin
     Canvas.Fill.Color:=FCellFontColor;
   end;
-  Canvas.FillText(ARect, Element.Caption, False, 1, [], HAlignment, VAlignment);
+  Canvas.FillText(ARect, Element.Caption, False, 1, [], TTextAlign.Center, TTextAlign.Center);
 
   // Границы
   Canvas.DrawRect(ARect, 0, 0, AllCorners, 1);
@@ -1383,15 +1361,6 @@ begin
       Canvas.Font.Style:=CellStyle.FontStyle;
     end;
 
-    var HAlignment:=ColTextHAlignment[ACol];
-    if CellStyle.TextHAlignmentIsSet then begin
-      HAlignment:=CellStyle.TextHAlignment;
-    end;
-    var VAlignment:=ColTextVAlignment[ACol];
-    if CellStyle.TextVAlignmentIsSet then begin
-      HAlignment:=CellStyle.TextVAlignment;
-    end;
-
     if IsSelected then begin
       // Выделенная ячейка
       if CellStyle.SelectedFontColorIsSet then begin
@@ -1409,12 +1378,12 @@ begin
     end;
 
     // Корректировка области вывод для текста
-    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth/2;
-    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth/2;
-    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth/2;
-    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/2;
+    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth;
+    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth;
+    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth;
+    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth;
 
-    Canvas.FillText(ARect, Text, False, 1, [], HAlignment, VAlignment);
+    Canvas.FillText(ARect, Text, False, 1, [], ColTextHAlignment[ACol], ColTextHAlignment[ARow]);
   end;
 end;
 
@@ -1431,11 +1400,11 @@ begin
 
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
-  Canvas.Stroke.Thickness:=FGridLineWidth/2;
+  Canvas.Stroke.Thickness:=FGridLineWidth;
 
   // Вычисляем начальную Y-координату для данных (после заголовков)
-  StartX:=FGridLineWidth/2-ViewLeft;
-  StartY:=FGridLineWidth/2+HeaderHeight-ViewTop;
+  StartX:=FGridLineWidth-ViewLeft;
+  StartY:=FGridLineWidth+HeaderHeight-ViewTop;
 
   var ViewBottomCell:=ViewBottom;
 
@@ -1555,10 +1524,9 @@ begin
   if not Style.IsMergedCell then Exit;
 
   for var Y:=Style.ParentRow to FRowCount-1 do begin
-    var IsMergedCell: Boolean;
     for var X:=Style.ParentCol to FColCount-1 do begin
       var TmpStyle:=CellStyle[X,Y];
-      IsMergedCell:=TmpStyle.IsMergedCell and (TmpStyle.ParentCol=Style.ParentCol) and (TmpStyle.ParentRow=Style.ParentRow);
+      var IsMergedCell:=TmpStyle.IsMergedCell and (TmpStyle.ParentCol=Style.ParentCol) and (TmpStyle.ParentRow=Style.ParentRow);
       if IsMergedCell then begin
         TmpStyle.ClearMergedCell;
         CellStyle[X,Y]:=TmpStyle;
@@ -1584,6 +1552,11 @@ begin
       end;
     end;
   end;
+end;
+
+function TMultiHeaderGrid.ContentSize: TSize;
+begin
+  Result := TSize.Create(FullTableWidth, FullTableHeight);
 end;
 
 function TMultiHeaderGrid.IsMergedCell(ACol, ARow: Integer): Boolean;
@@ -1732,7 +1705,7 @@ var
   Text: string;
 begin
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
-  var CellDelimterWidth:=FGridLineWidth;
+  var CellDelimterWidth:=2*FGridLineWidth;
   var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth;
   var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
@@ -1832,7 +1805,7 @@ begin
   Canvas.Font.Assign(FCellFont);
 
   var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
-  var CellDelimterHeight:=FGridLineWidth/2;
+  var CellDelimterHeight:=2*FGridLineWidth;
   var CellPaddingHeightFull:=CellPaddingHeight+CellDelimterHeight/2;
   var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
@@ -1917,11 +1890,24 @@ procedure TMultiHeaderGrid.ScrollToSelectedCell;
 begin
   if (FSelectedCell.X>=0) and (FSelectedCell.Y>=0) then begin
 
-    var Rect:=GetMergedCellRect(FSelectedCell.X,FSelectedCell.Y);
+    var Rect: TRectF;
+    var MergedCell: TMergedCell;
+    if IsMergedCell(FSelectedCell.X,FSelectedCell.Y,MergedCell) then begin
+      Rect:=GetCellRect(MergedCell.Col, MergedCell.Row);
+      // Корректируем прямоугольник для объединенной ячейки
+      Rect.Right:=Rect.Left;
+      Rect.Bottom:=Rect.Top;
+      for var K:=0 to MergedCell.ColSpan-1 do
+        Rect.Right:=Rect.Right+GetColWidth(MergedCell.Col+K);
+      for var K:=0 to MergedCell.RowSpan-1 do
+        Rect.Bottom:=Rect.Bottom+GetRowHeight(MergedCell.Row+K);
+    end else begin
+      Rect:=GetCellRect(FSelectedCell.X,FSelectedCell.Y);
+    end;
     Rect.Offset(ViewLeft,ViewTop-HeaderHeight);
 
     if Rect.Left<ViewLeft then begin
-      ViewLeft:=Trunc(Rect.Left-FGridLineWidth/2);
+      ViewLeft:=Trunc(Rect.Left-FGridLineWidth);
     end;
 
     if Rect.Right>ViewLeft+ViewPortDataWidth then begin
@@ -1932,8 +1918,8 @@ begin
       ViewTop:=Trunc(Rect.Top);
     end;
 
-    if (Rect.Bottom>ViewBottom-FGridLineWidth) then begin
-      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-FGridLineWidth/2);
+    if (Rect.Bottom>ViewBottom-2*FGridLineWidth) then begin
+      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-2*FGridLineWidth);
     end;
   end;
 
@@ -2101,23 +2087,49 @@ end;
 
 procedure TMultiHeaderGrid.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
   var Handled: Boolean);
-begin
+const
+  ScrollBigStepsDivider = 5;
+  WheelDeltaDivider = -120;
+
+   function CanVerticalScroll: Boolean;
+   begin
+     Result := (ContentSize.Height > Height) {and
+       (ScrollDirections <> TScrollDirections.Horizontal)} and ([ssHorizontal, ssShift] * Shift = []);
+   end;
+
+   function CanHorizontalScroll: Boolean;
+   begin
+     Result := (ContentSize.Width > Width) {and
+       (ScrollDirections <> TScrollDirections.Vertical)} and not ([ssHorizontal, ssShift] * Shift = []);
+   end;
+
+var
+  Offset: Single;
+begin               //Self.siz
   inherited;
-  if Handled then Exit;
-
-  var WheelDeltaDivider:=2.0;
-  if ssShift in Shift then begin
-    WheelDeltaDivider:=0.5;
-  end;
-
-  WheelDelta:=-Max(1,round(Abs(WheelDelta/WheelDeltaDivider)))*Sign(WheelDelta);
-
-  if ssHorizontal in Shift then begin
-    ViewLeft:=ViewLeft+WheelDelta;
-  end else begin
-    ViewTop:=Min(ViewTop+WheelDelta,FullTableHeight);
-  end;
-  InvalidateRect(LocalRect);
+  if not (Handled{ or DisableMouseWheel}) {and (FContentLayout <> nil)} {and Model.EnabledScroll} then
+    if CanHorizontalScroll then
+    begin
+      FAniCalculations.Shown := True;
+      if HScrollBar <> nil then
+        Offset := DefaultRowHeight * 2//HScrollBar.SmallChange
+      else
+        Offset := Width / ScrollBigStepsDivider;
+      Offset := Offset * WheelDelta / WheelDeltaDivider;
+      FAniCalculations.MouseWheel(Offset, 0);
+      Handled := True;
+    end
+    else if CanVerticalScroll then
+    begin
+      FAniCalculations.Shown := True;
+      if VScrollBar <> nil then
+        Offset := DefaultRowHeight * 2//VScrollBar.SmallChange
+      else
+        Offset := Height / ScrollBigStepsDivider;
+      Offset := Offset * WheelDelta / WheelDeltaDivider;
+      FAniCalculations.MouseWheel(0, Offset);
+      Handled := True;
+    end;
 end;
 
 procedure CopyTextToClipboard(const AText: string);
@@ -2138,7 +2150,9 @@ var
   OldCol, OldRow   : Integer;
   MergedCellOld    : TMergedCell;
   MergedCellNew    : TMergedCell;
+  //Handled          : Boolean;
 begin
+  //Handled:=False;
 
   if IsFocused then
   begin
@@ -2148,27 +2162,35 @@ begin
     case Key of
       vkLeft: begin
         DX:=-1;
+        //Handled:=True;
       end;
       vkRight: begin
         DX:=1;
+        //Handled:=True;
       end;
       vkUp: begin
         DY:=-1;
+        //Handled:=True;
       end;
       vkDown: begin
         DY:=1;
+        //Handled:=True;
       end;
       vkHome: begin
         DY:=-RowCount;
+        //Handled:=True;
       end;
       vkEnd: begin
         DY:=RowCount;
+        //Handled:=True;
       end;
       vkPrior: begin  // Page Up
         DY:=-Trunc(ViewCellsHeight/DefaultRowHeight);
+        //Handled:=True;
       end;
       vkNext: begin   // Page Down
         DY:=Trunc(ViewCellsHeight/DefaultRowHeight);
+        //Handled:=True;
       end;
       vkReturn: begin // Enter
         DoCellClick(FSelectedCell.X, FSelectedCell.Y);
@@ -2643,28 +2665,6 @@ begin
   FSelectedFontColorIsSet:=Value;
 end;
 
-procedure TCellStyle.SetTextHAlignment(const Value: TTextAlign);
-begin
-  FTextHAlignment:=Value;
-  FTextHAlignmentIsSet:=True;
-end;
-
-procedure TCellStyle.SetTextHAlignmentIsSet(const Value: Boolean);
-begin
-  FTextHAlignmentIsSet:=Value;
-end;
-
-procedure TCellStyle.SetTextVAlignment(const Value: TTextAlign);
-begin
-  FTextVAlignment:=Value;
-  FTextVAlignmentIsSet:=True;
-end;
-
-procedure TCellStyle.SetTextVAlignmentIsSet(const Value: Boolean);
-begin
-  FTextVAlignmentIsSet:=Value;
-end;
-
 { TMultiHeaderStringGrid }
 
 constructor TMultiHeaderStringGrid.Create(AOwner: TComponent);
@@ -3095,10 +3095,93 @@ begin
   end;
 end;
 
-
-procedure TMultiHeaderGrid.ClearSelection;
+function TMultiHeaderGrid.GetSceneScale: Single;
 begin
-  SelectedCell:=Point(-1,-1);
+  Result := 0;
+  if Scene <> nil then
+    Result := Scene.GetSceneScale;
+  if Result <= 0 then
+    Result := 1;
+end;
+
+procedure TMultiHeaderGrid.UpdateAnimationTargets(const ContentLayoutRect: TRectF);
+var
+  I, J: Integer;
+  LTargets: array of TAniCalculations.TTarget;
+  NewTargets: array of TAniCalculations.TTarget;
+begin
+  SetLength(LTargets, FAniCalculations.TargetCount);
+  FAniCalculations.GetTargets(LTargets);
+  SetLength(NewTargets, 2);
+  NewTargets[0].TargetType := TAniCalculations.TTargetType.Min;
+  NewTargets[0].Point := TPointF.Create(0, 0);
+  NewTargets[1].TargetType := TAniCalculations.TTargetType.Max;
+  NewTargets[1].Point := TPointD.Create(Max(0, ContentSize.Width - ContentLayoutRect.Width),
+    Max(0, ContentSize.Height - ContentLayoutRect.Height));
+  for I := 0 to Length(LTargets) - 1 do
+    if not (LTargets[I].TargetType in [TAniCalculations.TTargetType.Min, TAniCalculations.TTargetType.Max]) then
+    begin
+      J := Length(NewTargets);
+      SetLength(NewTargets, J + 1);
+      NewTargets[J].TargetType := LTargets[I].TargetType;
+      NewTargets[J].Point := LTargets[I].Point;
+    end;
+  FAniCalculations.SetTargets(NewTargets);
+end;
+
+procedure TMultiHeaderGrid.UpdateAniViewport;
+var
+  LScale, X, Y: Double;
+begin
+  LScale := GetSceneScale;
+  X := Round(FAniCalculations.ViewportPosition.X * LScale) / LScale;
+  Y := Round(FAniCalculations.ViewportPosition.Y * LScale) / LScale;
+  FInInternalScroll := True;
+  VScrollBar.Value := Y;
+  HScrollBar.Value := X;
+  FInInternalScroll := False;
+end;
+
+procedure TMultiHeaderGrid.StartScrolling;
+begin
+  //
+end;
+
+procedure TMultiHeaderGrid.StopScrolling;
+begin
+  //
+end;
+
+{ TScrollCalculations }
+
+constructor TScrollCalculations.Create(AOwner: TPersistent);
+begin
+  if not (AOwner is TMultiHeaderGrid) then
+    raise EArgumentException.Create(sArgumentInvalid);
+  inherited;
+  FGrid := TMultiHeaderGrid(AOwner);
+end;
+
+procedure TScrollCalculations.DoChanged;
+begin
+  if not (csDestroying in FGrid.ComponentState) then
+    FGrid.UpdateAniViewport;
+
+  inherited;
+end;
+
+procedure TScrollCalculations.DoStart;
+begin
+  inherited;
+  if not (csDestroying in FGrid.ComponentState) then
+    FGrid.StartScrolling;
+end;
+
+procedure TScrollCalculations.DoStop;
+begin
+  inherited;
+  if not (csDestroying in FGrid.ComponentState) then
+    FGrid.StopScrolling;
 end;
 
 end.
