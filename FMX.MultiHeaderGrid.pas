@@ -900,7 +900,7 @@ end;
 
 function TMultiHeaderGrid.FullTableWidth: Integer;
 begin
-  Result:=round(2*GridLineWidth);
+  Result:=round(GridLineWidth/2);
   for var i:=0 to FColCount-1 do begin
     Result:=Result+FColWidths[i];
   end;
@@ -972,8 +972,8 @@ begin
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
-  X:=FGridLineWidth-ViewLeft;
-  Y:=FGridLineWidth+HeaderHeight-ViewTop;
+  X:=FGridLineWidth/2-ViewLeft;
+  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
 
   // Вычисляем позицию колонки
   for I:=0 to ACol-1 do
@@ -1009,8 +1009,8 @@ begin
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
-  X:=FGridLineWidth-ViewLeft;
-  Y:=FGridLineWidth+HeaderHeight-ViewTop;
+  X:=FGridLineWidth/2-ViewLeft;
+  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
 
   // Вычисляем позицию колонки
   for I:=0 to ACol-1 do
@@ -1031,7 +1031,7 @@ end;
 
 function TMultiHeaderGrid.HeaderHeight: Integer;
 begin
-  Result:=round(FGridLineWidth);
+  Result:=round(FGridLineWidth/2);
 
   // Добавляем высоту заголовков
   for var I:=0 to FHeaderLevels.Count-1 do
@@ -1046,8 +1046,8 @@ var
   ActualColSpan : Integer;
   ActualRowSpan : Integer;
 begin
-  X:=FGridLineWidth-ViewLeft;
-  Y:=FGridLineWidth;
+  X:=FGridLineWidth/2-ViewLeft;
+  Y:=FGridLineWidth/2;
 
   // Вычисляем позицию уровня заголовка
   for i:=0 to ALevel-1 do begin
@@ -1194,7 +1194,7 @@ var
 begin
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
-  Canvas.Stroke.Thickness:=FGridLineWidth;
+  Canvas.Stroke.Thickness:=FGridLineWidth/2;
 
   for i:=0 to FHeaderLevels.Count-1 do begin
     J:=0;
@@ -1409,10 +1409,10 @@ begin
     end;
 
     // Корректировка области вывод для текста
-    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth;
-    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth;
-    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth;
-    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth;
+    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth/2;
+    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth/2;
+    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth/2;
+    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/2;
 
     Canvas.FillText(ARect, Text, False, 1, [], HAlignment, VAlignment);
   end;
@@ -1431,11 +1431,11 @@ begin
 
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
-  Canvas.Stroke.Thickness:=FGridLineWidth;
+  Canvas.Stroke.Thickness:=FGridLineWidth/2;
 
   // Вычисляем начальную Y-координату для данных (после заголовков)
-  StartX:=FGridLineWidth-ViewLeft;
-  StartY:=FGridLineWidth+HeaderHeight-ViewTop;
+  StartX:=FGridLineWidth/2-ViewLeft;
+  StartY:=FGridLineWidth/2+HeaderHeight-ViewTop;
 
   var ViewBottomCell:=ViewBottom;
 
@@ -1732,7 +1732,7 @@ var
   Text: string;
 begin
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
-  var CellDelimterWidth:=2*FGridLineWidth;
+  var CellDelimterWidth:=FGridLineWidth;
   var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth;
   var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
@@ -1832,7 +1832,7 @@ begin
   Canvas.Font.Assign(FCellFont);
 
   var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
-  var CellDelimterHeight:=2*FGridLineWidth;
+  var CellDelimterHeight:=FGridLineWidth/2;
   var CellPaddingHeightFull:=CellPaddingHeight+CellDelimterHeight/2;
   var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
@@ -1921,7 +1921,7 @@ begin
     Rect.Offset(ViewLeft,ViewTop-HeaderHeight);
 
     if Rect.Left<ViewLeft then begin
-      ViewLeft:=Trunc(Rect.Left-FGridLineWidth);
+      ViewLeft:=Trunc(Rect.Left-FGridLineWidth/2);
     end;
 
     if Rect.Right>ViewLeft+ViewPortDataWidth then begin
@@ -1932,8 +1932,8 @@ begin
       ViewTop:=Trunc(Rect.Top);
     end;
 
-    if (Rect.Bottom>ViewBottom-2*FGridLineWidth) then begin
-      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-2*FGridLineWidth);
+    if (Rect.Bottom>ViewBottom-FGridLineWidth) then begin
+      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-FGridLineWidth/2);
     end;
   end;
 
