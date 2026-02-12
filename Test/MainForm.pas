@@ -99,6 +99,9 @@ begin
   Grid.ColCount:=15;
   RowCountEditChange(nil);
 
+  Grid.ColMinWidth[0]:=50;
+  Grid.ColMaxWidth[0]:=200;
+
   Grid.ColTextHAlignment[3]:=TTextAlign.Trailing;
   Grid.ColTextHAlignment[6]:=TTextAlign.Center;
   Grid.ColTextHAlignment[13]:=TTextAlign.Center;

@@ -7,6 +7,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts;
 
 type
+
   THeaderLevel = class;
   THeaderLevels = class;
 
@@ -157,12 +158,15 @@ type
 
     constructor Create(Grid : TMultiHeaderGrid);
 
-    function AddRow(Heigth: integer = 25): THeaderLevel; overload;
+    function AddRow: THeaderLevel; overload;
+    function AddRow(Heigth: integer): THeaderLevel; overload;
     function GetElementAtCell(ACol, ARow: integer): THeaderElement;
   end;
 
   FColData = record
     Widths         : integer;
+    MinWidth       : integer;
+    MaxWidth       : integer;
     TextVAlignment : TTextAlign;
     TextHAlignment : TTextAlign;
     WordWrap       : Boolean;
@@ -335,6 +339,10 @@ type
     procedure SetHeaderLineColor(const Value: TAlphaColor);
     procedure SetVerticalScroll(const Value: TScrollShowMode);
     procedure SetHorisontalScroll(const Value: TScrollShowMode);
+    function GetColMaxWidth(Index: Integer): integer;
+    function GetColMinWidth(Index: Integer): integer;
+    procedure SetColMaxWidth(Index: Integer; const Value: integer);
+    procedure SetColMinWidth(Index: Integer; const Value: integer);
   protected
     function CanObserve(const ID: Integer): Boolean; override;
 
@@ -391,6 +399,8 @@ type
     property ColWidths[Index: Integer]: Integer read GetColWidth write SetColWidth;
     property ColTextHAlignment[Index: Integer]: TTextAlign read GetColTextHAlignment write SetColTextHAlignment;
     property ColTextVAlignment[Index: Integer]: TTextAlign read GetColTextVAlignment write SetColTextVAlignment;
+    property ColMinWidth[Index: Integer]: integer read GetColMinWidth write SetColMinWidth;
+    property ColMaxWidth[Index: Integer]: integer read GetColMaxWidth write SetColMaxWidth;
     property ColWordWrap[Index: Integer]: Boolean read GetColWordWrap write SetColWordWrap;
 
     property RowHeights[Index: Integer]: Integer read GetRowHeight write SetRowHeight;
@@ -650,10 +660,15 @@ end;
 
 { THeaderLevels }
 
-function THeaderLevels.AddRow(Heigth: integer = 25): THeaderLevel;
+function THeaderLevels.AddRow(Heigth: integer): THeaderLevel;
 begin
   Result:=THeaderLevel.Create(Self);
   Result.FHeight:=Heigth;
+end;
+
+function THeaderLevels.AddRow: THeaderLevel;
+begin
+  Result:=AddRow(25);
 end;
 
 constructor THeaderLevels.Create(Grid: TMultiHeaderGrid);
@@ -765,6 +780,8 @@ begin
     FColData[i].TextVAlignment:=TTextAlign.Center;
     FColData[i].TextHAlignment:=TTextAlign.Leading;
     FColData[i].WordWrap:=False;
+    FColData[i].MinWidth:=0;
+    FColData[i].MaxWidth:=MaxInt;
   end;
 
   var Top:=0;
@@ -843,6 +860,8 @@ begin
       FColData[i].Widths:=FDefaultColWidth;
       FColData[i].TextVAlignment:=TTextAlign.Center;
       FColData[i].TextHAlignment:=TTextAlign.Leading;
+      FColData[i].MinWidth:=0;
+      FColData[i].MaxWidth:=MaxInt;
       FColData[i].WordWrap:=False;
     end;
 
@@ -852,6 +871,24 @@ begin
     Invalidate;
 
     HScrollBar.Max:=Value;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetColMaxWidth(Index: Integer; const Value: integer);
+begin
+  if (Index>=0) and (Index<FColCount) then begin
+    FColData[Index].MaxWidth:=Max(Value,FColData[Index].MinWidth);
+    FColData[Index].Widths:=Max(FColData[Index].Widths,FColData[Index].MaxWidth);
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetColMinWidth(Index: Integer; const Value: integer);
+begin
+  if (Index>=0) and (Index<FColCount) then begin
+    FColData[Index].MinWidth:=Min(Value,FColData[Index].MaxWidth);
+    FColData[Index].Widths:=Min(FColData[Index].Widths,FColData[Index].MinWidth);
+    Invalidate;
   end;
 end;
 
@@ -912,7 +949,7 @@ begin
 
     for i:=0 to FColCount-1 do begin
       if FColData[i].Widths=OldValue then begin
-        FColData[i].Widths:=FDefaultColWidth;
+        ColWidths[i]:=FDefaultColWidth;
       end;
     end;
     UpdateSize;
@@ -945,6 +982,22 @@ begin
     inc(Result,FColData[i].Widths);
 end;
 
+function TMultiHeaderGrid.GetColMaxWidth(Index: Integer): integer;
+begin
+  if (Index>=0) and (Index<Length(FColData)) then
+    Result:=FColData[Index].MaxWidth
+  else
+    Result:=MaxInt;
+end;
+
+function TMultiHeaderGrid.GetColMinWidth(Index: Integer): integer;
+begin
+  if (Index>=0) and (Index<Length(FColData)) then
+    Result:=FColData[Index].MinWidth
+  else
+    Result:=0;
+end;
+
 function TMultiHeaderGrid.GetColWidth(Index: Integer): Integer;
 begin
   if (Index>=0) and (Index<Length(FColData)) then
@@ -973,7 +1026,7 @@ end;
 procedure TMultiHeaderGrid.SetColWidth(Index: Integer; const Value: Integer);
 begin
   if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].Widths<>Value) then begin
-    FColData[Index].Widths:=Value;
+    FColData[Index].Widths:=Max(Min(Value,FColData[Index].MaxWidth),FColData[Index].MinWidth);
     UpdateSize;
     Invalidate;
   end;
@@ -1939,7 +1992,7 @@ begin
 
         if WordWrapEnabled then begin
           // При WordWrap измеряем ширину самого длинного слова
-          var Words:=Text.Split([' ',':',';','.','-',',',#9]);
+          var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
           var MaxWordWidth:=0.0;
           for var Word in Words do begin
             if Word<>'' then begin
@@ -1965,7 +2018,7 @@ begin
     if NewWidth<FDefaultColWidth then
       NewWidth:=FDefaultColWidth;
 
-    FColData[i].Widths:=NewWidth;
+    ColWidths[i]:=NewWidth;
   end;
   Invalidate;
 end;
@@ -3184,7 +3237,7 @@ begin
     if NewWidth<10 then
       NewWidth:=10; // Минимальная ширина столбца
 
-    SetColWidth(i, NewWidth);
+    ColWidths[i]:=NewWidth;
   end;
 
   Invalidate;
@@ -3205,7 +3258,7 @@ begin
       NewWidth:=10; // Минимальная ширина
     end;
 
-    SetColWidth(EndCol, NewWidth);
+    ColWidths[EndCol]:=NewWidth;
 
     Invalidate;
 
