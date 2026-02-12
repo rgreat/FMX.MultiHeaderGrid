@@ -3,7 +3,7 @@ object Form1: TForm1
   Top = 0
   Caption = 'TMultiHeaderGrid Test Application'
   ClientHeight = 484
-  ClientWidth = 699
+  ClientWidth = 830
   Position = DesktopCenter
   FormFactor.Width = 320
   FormFactor.Height = 480
@@ -12,7 +12,7 @@ object Form1: TForm1
   DesignerMasterStyle = 0
   object Panel1: TPanel
     Align = Top
-    Size.Width = 699.000000000000000000
+    Size.Width = 830.000000000000000000
     Size.Height = 36.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 1
@@ -77,12 +77,15 @@ object Form1: TForm1
       Text = 'Benchmark'
       OnClick = ButtonBenchmarkClick
     end
-    object CheckBox1: TCheckBox
+    object RowSelectCheckBox: TCheckBox
       Position.X = 545.000000000000000000
       Position.Y = 8.000000000000000000
-      TabOrder = 7
+      Size.Width = 88.000000000000000000
+      Size.Height = 19.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 8
       Text = 'Row Select'
-      OnChange = CheckBox1Change
+      OnChange = RowSelectCheckBoxChange
     end
     object ButtonFillCells: TButton
       Position.X = 158.000000000000000000
@@ -94,19 +97,32 @@ object Form1: TForm1
       Text = 'Fill Cells'
       OnClick = ButtonFillCellsClick
     end
+    object WordWrapCheckBox: TCheckBox
+      Hint = 'AutoSize would be slow!'
+      Position.X = 633.000000000000000000
+      Position.Y = 8.000000000000000000
+      Size.Width = 88.000000000000000000
+      Size.Height = 19.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 7
+      Text = 'Word Wrap'
+      ParentShowHint = False
+      ShowHint = True
+      OnChange = WordWrapCheckBoxChange
+    end
   end
   object TabControl1: TTabControl
     Align = Client
-    Size.Width = 699.000000000000000000
+    Size.Width = 830.000000000000000000
     Size.Height = 426.000000000000000000
     Size.PlatformDefault = False
     TabIndex = 0
     TabOrder = 3
     TabPosition = PlatformDefault
     Sizes = (
-      699s
+      830s
       400s
-      699s
+      830s
       400s)
     object TabItem1: TTabItem
       CustomIcon = <
@@ -127,13 +143,14 @@ object Form1: TForm1
         Margins.Top = 4.000000000000000000
         Margins.Right = 4.000000000000000000
         Margins.Bottom = 4.000000000000000000
-        Size.Width = 691.000000000000000000
+        Size.Width = 822.000000000000000000
         Size.Height = 392.000000000000000000
         Size.PlatformDefault = False
         OnDblClick = GridDblClick
+        Col = -1
+        Row = -1
         DefaultColWidth = 80
         DefaultRowHeight = 20
-        GridLineColor = claGray
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
         OnSelectCell = GridSelectCell
@@ -164,12 +181,13 @@ object Form1: TForm1
         Margins.Top = 4.000000000000000000
         Margins.Right = 4.000000000000000000
         Margins.Bottom = 4.000000000000000000
-        Size.Width = 691.000000000000000000
+        Size.Width = 822.000000000000000000
         Size.Height = 392.000000000000000000
         Size.PlatformDefault = False
+        Col = -1
+        Row = -1
         DefaultColWidth = 80
         DefaultRowHeight = 20
-        GridLineColor = claGray
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
         OnSelectCell = GridSelectCell
@@ -180,14 +198,14 @@ object Form1: TForm1
   object StatusBar1: TStatusBar
     Position.Y = 462.000000000000000000
     ShowSizeGrip = True
-    Size.Width = 699.000000000000000000
+    Size.Width = 830.000000000000000000
     Size.Height = 22.000000000000000000
     Size.PlatformDefault = False
     TabOrder = 2
     object StatusText: TLabel
       Align = Client
       Margins.Left = 3.000000000000000000
-      Size.Width = 696.000000000000000000
+      Size.Width = 827.000000000000000000
       Size.Height = 22.000000000000000000
       Size.PlatformDefault = False
       Text = 'RowCount'

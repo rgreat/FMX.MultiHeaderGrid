@@ -21,8 +21,7 @@ type
     FTextHAlignment         : TTextAlign;
     FSelectedCellColor      : TAlphaColor;
     FSelectedFontColor      : TAlphaColor;
-    FParentCol              : Integer;
-    FParentRow              : Integer;
+    FWordWrap               : Boolean;
 
     FFontStyleIsSet         : Boolean;
     FFontSizeIsSet          : Boolean;
@@ -34,6 +33,10 @@ type
     FSelectedCellColorIsSet : Boolean;
     FSelectedFontColorIsSet : Boolean;
     FIsMergedCell           : Boolean;
+    FWordWrapIsSet          : Boolean;
+
+    FParentCol              : Integer;
+    FParentRow              : Integer;
 
     procedure SetCellColor(const Value: TAlphaColor);
     procedure SetFontColor(const Value: TAlphaColor);
@@ -55,6 +58,9 @@ type
     procedure SetTextHAlignmentIsSet(const Value: Boolean);
     procedure SetTextVAlignment(const Value: TTextAlign);
     procedure SetTextVAlignmentIsSet(const Value: Boolean);
+  private
+    procedure SetWordWrap(const Value: Boolean);
+    procedure SetWordWrapIsSet(const Value: Boolean);
   public
     class operator Initialize(out Dest: TCellStyle);
 
@@ -88,6 +94,9 @@ type
 
     property SelectedCellColorIsSet: Boolean read FSelectedCellColorIsSet write SetSelectedCellColorIsSet;
     property SelectedFontColorIsSet: Boolean read FSelectedFontColorIsSet write SetSelectedFontColorIsSet;
+
+    property WordWrap: Boolean read FWordWrap write SetWordWrap;
+    property WordWrapIsSet: Boolean read FWordWrapIsSet write SetWordWrapIsSet;
 
     property ParentCol: Integer read FParentCol write SetParentCol;
     property ParentRow: Integer read FParentRow write SetParentRow;
@@ -132,10 +141,11 @@ type
     FLevels : THeaderLevels;
     constructor Create(HeaderLevels: THeaderLevels);
 
-    function Add(Caption: string = '';
-                 ColSpan: Integer = 1;
-                 RowSpan: Integer = 1): THeaderElement; overload;
+    function AddColumn(Caption: string = '';
+                       ColSpan: Integer = 1;
+                       RowSpan: Integer = 1): THeaderElement;
 
+    function FillRow(Caption: string = ''): THeaderElement;
 
     property Height: Integer read FHeight write SetHeight;
   end;
@@ -147,8 +157,15 @@ type
 
     constructor Create(Grid : TMultiHeaderGrid);
 
-    function Add(Heigth: integer = 25): THeaderLevel; overload;
+    function AddRow(Heigth: integer = 25): THeaderLevel; overload;
     function GetElementAtCell(ACol, ARow: integer): THeaderElement;
+  end;
+
+  FColData = record
+    Widths         : integer;
+    TextVAlignment : TTextAlign;
+    TextHAlignment : TTextAlign;
+    WordWrap       : Boolean;
   end;
 
   TRowData = packed record
@@ -166,7 +183,9 @@ type
   TRowResizedEvent = procedure(Sender: TObject; ARow: Integer) of object;
   TGridScrollEvent = procedure(Sender: TObject; Left,Top: Integer) of object;
 
-  TResizeMode = (rmNone,rmColumn,rmHeaderRow, rmGridRow);
+  TResizeMode = (rmNone, rmColumn, rmHeaderRow, rmGridRow);
+
+  TScrollShowMode = (smAuto, smShow, smHide);
 
   TMultiHeaderGrid = class(TControl)
   private
@@ -179,12 +198,13 @@ type
     FRowCount: Integer;
     FDefaultColWidth: integer;
     FDefaultRowHeight: integer;
-    FColWidths: array of integer;
-    FColTextVAlignment: array of TTextAlign;
-    FColTextHAlignment: array of TTextAlign;
+
+    FColData: array of FColData;
     FRowData: Array of TRowData;
+
     FHeaderLevels: THeaderLevels;
     FGridLines: Boolean;
+    FHeaderLineColor: TAlphaColor;
     FGridLineColor: TAlphaColor;
     FGridLineWidth: Single;
     FSelectedCell: TPoint;
@@ -238,6 +258,10 @@ type
     FLastClickIsOnCell: boolean;
 
     FRowSelect: Boolean;
+    FWordWrap: Boolean;
+    FGridCellsHasWordWrap: boolean;
+    FVerticalScroll: TScrollShowMode;
+    FHorisontalScroll: TScrollShowMode;
 
     function ResizeStartWidth: Integer;
 
@@ -259,7 +283,7 @@ type
     function GetRowHeight(Index: Integer): Integer;
     procedure SetRowHeight(Index: Integer; const Value: Integer);
     function GetCellRect(ACol, ARow: Integer): TRectF; overload;
-    function GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF; overload;
+    function GetCellRect(ACol, ARow: Integer; out MergedCell: TMergedCell): TRectF; overload;
     function GetMergedCellRect(ACol, ARow: Integer): TRectF;
     function GetHeaderRect(ALevel, ACol: Integer): TRectF;
     procedure DrawGridLines(Canvas: TCanvas);
@@ -305,6 +329,12 @@ type
     function GetColTextVAlignment(Index: Integer): TTextAlign;
     procedure SetColTextHAlignment(Index: Integer; const Value: TTextAlign);
     procedure SetColTextVAlignment(Index: Integer; const Value: TTextAlign);
+    function GetColWordWrap(Index: Integer): Boolean;
+    procedure SetColWordWrap(Index: Integer; const Value: Boolean);
+    procedure SetWordWrap(const Value: Boolean);
+    procedure SetHeaderLineColor(const Value: TAlphaColor);
+    procedure SetVerticalScroll(const Value: TScrollShowMode);
+    procedure SetHorisontalScroll(const Value: TScrollShowMode);
   protected
     function CanObserve(const ID: Integer): Boolean; override;
 
@@ -349,8 +379,10 @@ type
     procedure UnMergeCells(ACol, ARow: Integer);
     procedure ClearMergedCells;
 
-    procedure AutoSizeRows(ForcePrecise: boolean = False);
     procedure AutoSizeCols(ForcePrecise: boolean = False);
+    procedure AutoSizeRows(ForcePrecise: boolean = False); overload;
+    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False); overload;
+    procedure AutoSizeVisibleRows;
     procedure AutoSize(ForcePrecise: boolean = False);
 
     procedure ClearSelection;
@@ -359,12 +391,16 @@ type
     property ColWidths[Index: Integer]: Integer read GetColWidth write SetColWidth;
     property ColTextHAlignment[Index: Integer]: TTextAlign read GetColTextHAlignment write SetColTextHAlignment;
     property ColTextVAlignment[Index: Integer]: TTextAlign read GetColTextVAlignment write SetColTextVAlignment;
+    property ColWordWrap[Index: Integer]: Boolean read GetColWordWrap write SetColWordWrap;
+
     property RowHeights[Index: Integer]: Integer read GetRowHeight write SetRowHeight;
     property RowTops[Index: Integer]: Integer read GetRowTops;
+
     property Cells[ACol, ARow: Integer]: string read GetCells write SetCells;
     property CellStyle[ACol, ARow: Integer]: TCellStyle read GetCellStyle write SetCellStyle;
+
     property SelectedCell: TPoint read FSelectedCell write SetSelectedCell;
-    property HeaderLevels: THeaderLevels read FHeaderLevels;
+    property Header: THeaderLevels read FHeaderLevels;
 
     property ViewTop: Integer read FViewTop write SetViewTop;
     property ViewLeft: Integer read FViewLeft write SetViewLeft;
@@ -372,16 +408,15 @@ type
     function ViewBottom: Integer;
     function ViewCellsHeight: Integer;
     function HeaderHeight: Integer;
+    function ViewPortWidth: Integer;
     function ViewPortHeight: Integer;
     function ViewPortDataHeight: Integer;
-    function ViewPortDataWidth: Integer;
     function FullTableWidth: Integer;
     function FullTableHeight: Integer;
 
-    function RowAtHeightCoord(Y: Integer): integer;
+    procedure Invalidate;
 
-    property Col: Integer read FSelectedCell.X write SetCol;
-    property Row: Integer read FSelectedCell.Y write SetRow;
+    function RowAtHeightCoord(Y: Integer): integer;
   published
     property Align;
     property Anchors;
@@ -410,12 +445,18 @@ type
 
     property ColCount: Integer read FColCount write SetColCount default 5;
     property RowCount: Integer read FRowCount write SetRowCount default 10;
+
+    property Col: Integer read FSelectedCell.X write SetCol;
+    property Row: Integer read FSelectedCell.Y write SetRow;
+
     property DefaultColWidth: integer read FDefaultColWidth write SetDefaultColWidth;
     property DefaultRowHeight: integer read FDefaultRowHeight write SetDefaultRowHeight;
     property BackgroundColor: TAlphaColor read FBackgroundColor write SetBackgroundColor default TAlphaColorRec.White;
     property GridLines: Boolean read FGridLines write SetGridLines default True;
-    property GridLineColor: TAlphaColor read FGridLineColor write SetGridLineColor;
+    property GridLineColor: TAlphaColor read FGridLineColor write SetGridLineColor default TAlphaColorRec.Gray;
     property GridLineWidth: Single read FGridLineWidth write SetGridLineWidth;
+
+    property HeaderLineColor: TAlphaColor read FHeaderLineColor write SetHeaderLineColor default TAlphaColorRec.Black;
 
     property HeaderFont: TFont read FHeaderFont write SetHeaderFont;
     property HeaderFontColor: TAlphaColor read FHeaderFontColor write SetHeaderFontColor default TAlphaColorRec.Black;
@@ -430,6 +471,10 @@ type
     property SelectedCellColor: TAlphaColor read FSelectedCellColor write SetSelectedCellColor default TAlphaColorRec.Lightblue;
 
     property RowSelect: Boolean read FRowSelect write SetRowSelect default False;
+    property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
+
+    property HorisontalScroll: TScrollShowMode read FHorisontalScroll write SetHorisontalScroll default TScrollShowMode.smAuto;
+    property VerticalScroll: TScrollShowMode read FVerticalScroll write SetVerticalScroll default TScrollShowMode.smAuto;
 
     property CellPadding: TBounds read FCellPadding write SetCellPadding;
 
@@ -450,7 +495,7 @@ type
     property ResizeColEnabled: Boolean read FResizeColEnabled write FResizeColEnabled default True;
     property ResizeHeaderRowEnabled: Boolean read FResizeHeaderRowEnabled write FResizeHeaderRowEnabled default True;
 
-    property ResizeMargin: Integer read GetResizeMargin write SetResizeMargin default 3;
+    property ResizeMargin: Integer read GetResizeMargin write SetResizeMargin default 2;
 
     property OnColumnResized: TColumnsResizedEvent read FOnColumnResized write FOnColumnResized;
     property OnHeaderResized: TRowResizedEvent read FOnHeaderResized write FOnHeaderResized;
@@ -515,9 +560,9 @@ end;
 
 { THeaderLevel }
 
-function THeaderLevel.Add(Caption: string = '';
-                          ColSpan: Integer = 1;
-                          RowSpan: Integer = 1): THeaderElement;
+function THeaderLevel.AddColumn(Caption: string = '';
+                                ColSpan: Integer = 1;
+                                RowSpan: Integer = 1): THeaderElement;
 begin
 //  var SkipCols:=GetColumnsToSkip;
   Result:=THeaderElement.Create(Self);
@@ -554,6 +599,11 @@ begin
   end;
 end;
 
+function THeaderLevel.FillRow(Caption: string): THeaderElement;
+begin
+  Result:=AddColumn(Caption,-1);
+end;
+
 constructor THeaderLevel.Create(HeaderLevels: THeaderLevels);
 begin
   inherited Create;
@@ -574,23 +624,23 @@ var
 begin
   // Создаем массив для отслеживания занятых колонок
   SetLength(Result, FLevels.Grid.ColCount);
-  for i := 0 to High(Result) do begin
-    Result[i] := False;
+  for i:=0 to High(Result) do begin
+    Result[i]:=False;
   end;
 
   var LevelIndex:=FLevels.IndexOf(Self);
 
   // Проходим по всем уровням выше текущего
-  for i := 0 to LevelIndex - 1 do begin
-    for j := 0 to FLevels[i].Count - 1 do begin
-      Element := FLevels[i][j];
+  for i:=0 to LevelIndex-1 do begin
+    for j:=0 to FLevels[i].Count-1 do begin
+      Element:=FLevels[i][j];
       // Если элемент занимает несколько строк и его RowSpan распространяется на текущий уровень
-      if (Element.RowSpan > 1) and (i + Element.RowSpan > LevelIndex) then begin
+      if (Element.RowSpan>1) and (i+Element.RowSpan>LevelIndex) then begin
         // Помечаем все колонки, которые занимает этот элемент
-        for k := 0 to Element.ColSpan - 1 do begin
-          Col := Element.ColSkip + k;
-          if Col < Length(Result) then begin
-            Result[Col] := True;
+        for k:=0 to Element.ColSpan-1 do begin
+          Col:=Element.ColSkip+k;
+          if Col<Length(Result) then begin
+            Result[Col]:=True;
           end;
         end;
       end;
@@ -600,7 +650,7 @@ end;
 
 { THeaderLevels }
 
-function THeaderLevels.Add(Heigth: integer = 25): THeaderLevel;
+function THeaderLevels.AddRow(Heigth: integer = 25): THeaderLevel;
 begin
   Result:=THeaderLevel.Create(Self);
   Result.FHeight:=Heigth;
@@ -620,9 +670,12 @@ begin
     var Level:=Items[Row];
     var Left:=0;
     for var Element in Level do begin
-      if (ACol>=Left+Element.ColSkip) and (ACol<Left+Element.ColSpan+Element.ColSkip) and
+      var ColSpan:=Element.ColSpan;
+      if ColSpan<0 then ColSpan:=Grid.FColCount-Left;
+
+      if (ACol>=Left+Element.ColSkip) and (ACol<Left+ColSpan+Element.ColSkip) and
          (ARow>=Row) and (ARow<Row+Element.RowSpan) then Exit(Element);
-      inc(Left,Element.ColSpan);
+      inc(Left,ColSpan);
     end;
   end;
 end;
@@ -643,7 +696,7 @@ end;
 
 constructor TMultiHeaderGrid.Create(AOwner: TComponent);
 var
- I: integer;
+ i: integer;
 begin
   inherited;
 
@@ -653,6 +706,7 @@ begin
   FDefaultRowHeight:=20;
   FGridLines:=True;
   FGridLineColor:=TAlphaColors.Gray;
+  FHeaderLineColor:=TAlphaColors.Black;
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
 
@@ -685,9 +739,7 @@ begin
   HScrollBar.Parent:=HScrollPanel;
   HScrollBar.Align:=TAlignLayout.Client;
 
-  FColWidths:=[];
-  FRowData:=[];
-
+  
   FCellFont:=TFont.Create;
   FCellFontColor:=TAlphaColors.Black;
   FCellColor:=TAlphaColors.White;
@@ -707,20 +759,19 @@ begin
   CellPadding:=TBounds.Create(TRectF.Create(2,1,2,1));
 
   // Инициализация ширины колонок и высоты строк
-  SetLength(FColWidths,FColCount);
-  SetLength(FColTextVAlignment,FColCount);
-  SetLength(FColTextHAlignment,FColCount);
-  for I:=0 to FColCount-1 do begin
-    FColWidths[i]:=FDefaultColWidth;
-    FColTextVAlignment[i]:=TTextAlign.Center;
-    FColTextHAlignment[i]:=TTextAlign.Leading;
+  SetLength(FColData,FColCount);
+  for i:=0 to FColCount-1 do begin
+    FColData[i].Widths:=FDefaultColWidth;
+    FColData[i].TextVAlignment:=TTextAlign.Center;
+    FColData[i].TextHAlignment:=TTextAlign.Leading;
+    FColData[i].WordWrap:=False;
   end;
 
   var Top:=0;
   SetLength(FRowData,FRowCount);
-  for I:=0 to FRowCount-1 do begin
-    FRowData[I].Top:=Top;
-    FRowData[I].Height:=trunc(FDefaultRowHeight);
+  for i:=0 to FRowCount-1 do begin
+    FRowData[i].Top:=Top;
+    FRowData[i].Height:=trunc(FDefaultRowHeight);
     Top:=Top+trunc(FDefaultRowHeight);
   end;
 
@@ -737,7 +788,15 @@ begin
   FResizeStartColumnIndex:=-1;
   FResizeEndColumnIndex:=-1;
   FResizeRowIndex:=-1;
-  FResizeMargin:=3;
+  FResizeMargin:=2;
+
+  if csDesigning in ComponentState then begin
+    Header.AddRow.FillRow('Header');
+    Width:=401;
+    Height:=225;
+    VScrollBar.Visible:=False;
+    HScrollPanel.Visible:=False;
+  end;
 end;
 
 destructor TMultiHeaderGrid.Destroy;
@@ -771,7 +830,7 @@ end;
 
 procedure TMultiHeaderGrid.SetColCount(Value: Integer);
 var
-  I: Integer;
+  i: Integer;
 begin
   if Value<0 then Value:=0;
   if FColCount<>Value then begin
@@ -779,17 +838,18 @@ begin
 
     FColCount:=Value;
 
-    SetLength(FColWidths,FColCount);
-    SetLength(FColTextVAlignment,FColCount);
-    SetLength(FColTextHAlignment,FColCount);
-    for I:=OldValue to FColCount-1 do begin
-      FColWidths[i]:=FDefaultColWidth;
-      FColTextVAlignment[i]:=TTextAlign.Center;
-      FColTextHAlignment[i]:=TTextAlign.Leading;
+    SetLength(FColData,FColCount);
+    for i:=OldValue to FColCount-1 do begin
+      FColData[i].Widths:=FDefaultColWidth;
+      FColData[i].TextVAlignment:=TTextAlign.Center;
+      FColData[i].TextHAlignment:=TTextAlign.Leading;
+      FColData[i].WordWrap:=False;
     end;
 
+    if FColCount=0 then FGridCellsHasWordWrap:=False;
+
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
 
     HScrollBar.Max:=Value;
   end;
@@ -815,7 +875,7 @@ begin
     var OldValue:=FRowCount;
 
     if (Value<FRowCount) and (Value>0) then begin
-      for var I:=0 to FColCount-1 do begin
+      for var i:=0 to FColCount-1 do begin
         UnMergeCells(i,Value-1);
       end;
     end;
@@ -824,16 +884,18 @@ begin
     var Top:=0;
     if OldValue>0 then Top:=FRowData[OldValue-1].Top;
     SetLength(FRowData,FRowCount);
-    for var I:=Max(OldValue-1,0) to FRowCount-1 do begin
-      FRowData[I].Top:=Top;
+    for var i:=Max(OldValue-1,0) to FRowCount-1 do begin
+      FRowData[i].Top:=Top;
       if i>=OldValue then begin
-        FRowData[I].Height:=trunc(FDefaultRowHeight);
+        FRowData[i].Height:=trunc(FDefaultRowHeight);
       end;
-      Top:=Top+FRowData[I].Height;
+      Top:=Top+FRowData[i].Height;
     end;
 
+    if FColCount=0 then FGridCellsHasWordWrap:=False;
+
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
 
     VScrollBar.Max:=FullTableHeight-HeaderHeight;
     VScrollBar.ViewportSize:=ViewPortDataHeight;
@@ -842,17 +904,19 @@ end;
 
 procedure TMultiHeaderGrid.SetDefaultColWidth(const Value: integer);
 var
-  I: Integer;
+  i: Integer;
 begin
-  if FDefaultColWidth<>Value then
-  begin
+  if FDefaultColWidth<>Value then begin
+    var OldValue:=FDefaultColWidth;
     FDefaultColWidth:=Value;
-    SetLength(FColWidths,FColCount);
-    for I:=0 to FColCount-1 do begin
-      FColWidths[i]:=FDefaultColWidth;
+
+    for i:=0 to FColCount-1 do begin
+      if FColData[i].Widths=OldValue then begin
+        FColData[i].Widths:=FDefaultColWidth;
+      end;
     end;
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -863,14 +927,14 @@ begin
 
     var Top:=0;
     SetLength(FRowData,FRowCount);
-    for var I:=0 to FRowCount-1 do begin
-      FRowData[I].Top:=Top;
-      FRowData[I].Height:=trunc(FDefaultRowHeight);
+    for var i:=0 to FRowCount-1 do begin
+      FRowData[i].Top:=Top;
+      FRowData[i].Height:=trunc(FDefaultRowHeight);
       Top:=Top+trunc(FDefaultRowHeight);
     end;
 
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -878,13 +942,13 @@ function TMultiHeaderGrid.GetColLeft(Index: Integer): Integer;
 begin
   Result:=0;
   for var i:=0 to Index-1 do
-    inc(Result,FColWidths[i]);
+    inc(Result,FColData[i].Widths);
 end;
 
 function TMultiHeaderGrid.GetColWidth(Index: Integer): Integer;
 begin
-  if (Index>=0) and (Index<Length(FColWidths)) then
-    Result:=FColWidths[Index]
+  if (Index>=0) and (Index<Length(FColData)) then
+    Result:=FColData[Index].Widths
   else
     Result:=FDefaultColWidth;
 end;
@@ -893,25 +957,25 @@ function TMultiHeaderGrid.FullTableHeight: Integer;
 begin
   if FRowCount=0 then Exit(0);
 
-  var BottomCell:=FRowData[High(FRowData)];
+  var BottomCell:=FRowData[FRowCount-1];
 
-  Result:=BottomCell.Top+BottomCell.Height+HeaderHeight;
+  Result:=BottomCell.Top+BottomCell.Height+HeaderHeight-Trunc(FGridLineWidth/2);
 end;
 
 function TMultiHeaderGrid.FullTableWidth: Integer;
 begin
-  Result:=round(GridLineWidth);
+  Result:=round(FGridLineWidth/2);
   for var i:=0 to FColCount-1 do begin
-    Result:=Result+FColWidths[i];
+    Result:=Result+FColData[i].Widths;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetColWidth(Index: Integer; const Value: Integer);
 begin
-  if (Index>=0) and (Index<Length(FColWidths)) and (FColWidths[Index]<>Value) then begin
-    FColWidths[Index]:=Value;
+  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].Widths<>Value) then begin
+    FColData[Index].Widths:=Value;
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -938,16 +1002,15 @@ end;
 
 procedure TMultiHeaderGrid.SetRowHeight(Index: Integer; const Value: Integer);
 var
-  I : integer;
+  i : integer;
 begin
-  if (Index>=0) and (Index<Length(FRowData)) and (FRowData[Index].Height<>Value) then
-  begin
+  if (Index>=0) and (Index<Length(FRowData)) and (FRowData[Index].Height<>Value) then begin
     FRowData[Index].Height:=Trunc(Value);
-    for I:=Index+1 to FRowCount-1 do begin
-      FRowData[I].Top:=FRowData[I-1].Top+FRowData[I-1].Height;
+    for i:=Index+1 to FRowCount-1 do begin
+      FRowData[i].Top:=FRowData[i-1].Top+FRowData[i-1].Height;
     end;
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -963,58 +1026,54 @@ begin
   DoGetCellStyle(ACol, ARow, Result);
 end;
 
-function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer; out AIsMergedCell: boolean): TRectF;
+function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer; out MergedCell: TMergedCell): TRectF;
 var
-  X, Y: Single;
-  I: Integer;
+  X, Y : Single;
+  i    : Integer;
 begin
   // Проверяем валидность диапазона
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
-
-  // Вычисляем позицию колонки
-  for I:=0 to ACol-1 do
-    X:=X+GetColWidth(I);
-
-  // Вычисляем позицию строки
-  Y:=Y+FRowData[ARow].Top;
-
-  var MergedCell: TMergedCell;
-  AIsMergedCell:=IsMergedCell(ACol,ARow,MergedCell);
+  X:=-ViewLeft;
+  Y:=HeaderHeight-ViewTop;
 
   if IsMergedCell(ACol,ARow,MergedCell) then begin
     // Корректируем прямоугольник для объединенной ячейки
-    Result.Left:=X;
-    Result.Top:=Y;
+
+    Result.Left:=X+GetColLeft(MergedCell.Col);
+    Result.Top:=Y+FRowData[MergedCell.Row].Top;
     Result.Right:=Result.Left;
     Result.Bottom:=Result.Top;
-    for var K:=0 to MergedCell.ColSpan-1 do
-      Result.Right:=Result.Right+GetColWidth(MergedCell.Col+K);
-    for var K:=0 to MergedCell.RowSpan-1 do
-      Result.Bottom:=Result.Bottom+GetRowHeight(MergedCell.Row+K);
+    for i:=0 to MergedCell.ColSpan-1 do
+      Result.Right:=Result.Right+GetColWidth(MergedCell.Col+i);
+    for i:=0 to MergedCell.RowSpan-1 do
+      Result.Bottom:=Result.Bottom+GetRowHeight(MergedCell.Row+i);
   end else begin
-    Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
+    // Прямой рассчет
+
+    Result.Left:=X+GetColLeft(ACol);
+    Result.Top:=Y+FRowData[ARow].Top;
+    Result.Right:=Result.Left+FColData[ACol].Widths;
+    Result.Bottom:=Result.Top+FRowData[ARow].Height;
   end;
 end;
 
 function TMultiHeaderGrid.GetCellRect(ACol, ARow: Integer): TRectF;
 var
   X, Y: Single;
-  I: Integer;
+  i: Integer;
 begin
   // Проверяем валидность диапазона
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2+HeaderHeight-ViewTop;
+  X:=FGridLineWidth/4-ViewLeft;
+  Y:=-FGridLineWidth/4+HeaderHeight-ViewTop;
 
   // Вычисляем позицию колонки
-  for I:=0 to ACol-1 do
-    X:=X+GetColWidth(I);
+  for i:=0 to ACol-1 do
+    X:=X+GetColWidth(i);
 
   // Вычисляем позицию строки
   Y:=Y+FRowData[ARow].Top;
@@ -1025,8 +1084,8 @@ end;
 
 function TMultiHeaderGrid.GetMergedCellRect(ACol, ARow: Integer): TRectF;
 begin
-  var IsMergedCell: boolean;
-  Result:=GetCellRect(ACol,ARow,IsMergedCell);
+  var MergedCell: TMergedCell;
+  Result:=GetCellRect(ACol,ARow,MergedCell);
 end;
 
 function TMultiHeaderGrid.HeaderHeight: Integer;
@@ -1034,20 +1093,20 @@ begin
   Result:=round(FGridLineWidth/2);
 
   // Добавляем высоту заголовков
-  for var I:=0 to FHeaderLevels.Count-1 do
-    Result:=Result+FHeaderLevels[I].Height;
+  for var i:=0 to FHeaderLevels.Count-1 do
+    Result:=Result+FHeaderLevels[i].Height;
 end;
 
 function TMultiHeaderGrid.GetHeaderRect(ALevel, ACol: Integer): TRectF;
 var
   X, Y          : Single;
-  I             : Integer;
+  i             : Integer;
   Element       : THeaderElement;
   ActualColSpan : Integer;
   ActualRowSpan : Integer;
 begin
-  X:=FGridLineWidth/2-ViewLeft;
-  Y:=FGridLineWidth/2;
+  X:=FGridLineWidth/4-ViewLeft;
+  Y:=FGridLineWidth/4;
 
   // Вычисляем позицию уровня заголовка
   for i:=0 to ALevel-1 do begin
@@ -1055,8 +1114,8 @@ begin
   end;
 
   // Вычисляем позицию колонки
-  for I:=0 to ACol-1 do
-    X:=X+GetColWidth(I);
+  for i:=0 to ACol-1 do
+    X:=X+GetColWidth(i);
 
   Element:=FHeaderLevels.GetElementAtCell(ACol,ALevel);
 
@@ -1065,13 +1124,17 @@ begin
 
   // Определяем фактический ColSpan (не больше оставшихся колонок)
   ActualColSpan:=Element.ColSpan;
-  if ACol+ActualColSpan>FColCount then
+  if ActualColSpan<0 then begin
     ActualColSpan:=FColCount-ACol;
+  end;
+  if ACol+ActualColSpan>FColCount then begin
+    ActualColSpan:=FColCount-ACol;
+  end;
 
   // Вычисляем ширину ячейки заголовка
   Result:=RectF(X, Y, X, Y+ FHeaderLevels[ALevel].Height);
-  for I:=0 to ActualColSpan-1 do
-    Result.Right:=Result.Right+GetColWidth(ACol+I);
+  for i:=0 to ActualColSpan-1 do
+    Result.Right:=Result.Right+GetColWidth(ACol+i);
 
   // Определяем фактический RowSpan (не больше оставшихся строк)
   ActualRowSpan:=Element.RowSpan;
@@ -1079,43 +1142,51 @@ begin
     ActualRowSpan:=FHeaderLevels.Count-ALevel;
 
   // Вычисляем высоту ячейки заголовка
-  for I:=1 to ActualRowSpan-1 do begin
-    Result.Bottom:=Result.Bottom+FHeaderLevels[ALevel+I].Height;
+  for i:=1 to ActualRowSpan-1 do begin
+    Result.Bottom:=Result.Bottom+FHeaderLevels[ALevel+i].Height;
   end;
 end;
 
 procedure TMultiHeaderGrid.UpdateSize;
 begin
-  if (FColCount+FRowCount>0) and (ViewPortHeight<FullTableHeight) then begin
-    VScrollBar.Visible:=True;
+  if (FColCount+FRowCount>0) and (ViewPortHeight<FullTableHeight-FGridLineWidth/2-1) then begin
+    VScrollBar.Visible:=FVerticalScroll<>TScrollShowMode.smHide;
     CornerPanel.Visible:=True;
-    VScrollBar.Max:=FullTableHeight-HeaderHeight;
+    VScrollBar.Max:=FullTableHeight-HeaderHeight-FGridLineWidth/2;
     VScrollBar.Value:=ViewTop;
     VScrollBar.ViewportSize:=ViewPortDataHeight;
     VScrollBar.SmallChange:=DefaultRowHeight;
     VScrollBar.OnChange:=VScrollBarChange;
+    VScrollBar.Enabled:=True;
   end else begin
-    VScrollBar.Visible:=False;
-    CornerPanel.Visible:=False;
+    VScrollBar.Visible:=FVerticalScroll=TScrollShowMode.smShow;
+    CornerPanel.Visible:=FVerticalScroll=TScrollShowMode.smShow;
     VScrollBar.OnChange:=nil;
+    VScrollBar.Max:=1;
+    VScrollBar.ViewportSize:=1;
+    VScrollBar.Enabled:=False;
   end;
 
-  if (FColCount>0) and (FullTableWidth>ViewPortDataWidth) then begin
-    HScrollPanel.Visible:=True;
-    HScrollBar.Max:=FullTableWidth;
+  if (FColCount>0) and (FullTableWidth>=ViewPortWidth) then begin
+    HScrollPanel.Visible:=FHorisontalScroll<>TScrollShowMode.smHide;
+    HScrollBar.Max:=FullTableWidth+1;
     HScrollBar.Value:=ViewLeft;
-    HScrollBar.ViewportSize:=ViewPortDataWidth;
+    HScrollBar.ViewportSize:=ViewPortWidth;
     HScrollBar.SmallChange:=FDefaultColWidth;
     HScrollBar.OnChange:=HScrollBarChange;
+    HScrollBar.Enabled:=True;
   end else begin
-    HScrollPanel.Visible:=False;
+    HScrollPanel.Visible:=FHorisontalScroll=TScrollShowMode.smShow;
     HScrollBar.OnChange:=nil;
+    HScrollBar.Max:=1;
+    HScrollBar.ViewportSize:=1;
+    HScrollBar.Enabled:=False;
   end;
 end;
 
 function TMultiHeaderGrid.ViewCellsHeight: Integer;
 begin
-  Result:=Round(LocalRect.Height-Margins.Bottom-HeaderHeight);
+  Result:=Round(LocalRect.Height-HeaderHeight);
   if HScrollPanel.Visible then Result:=Round(Result-HScrollPanel.Height);
 end;
 
@@ -1124,7 +1195,7 @@ begin
   Result:=ViewPortHeight-HeaderHeight;
 end;
 
-function TMultiHeaderGrid.ViewPortDataWidth: Integer;
+function TMultiHeaderGrid.ViewPortWidth: Integer;
 begin
   Result:=Round(LocalRect.Width);
   if VScrollBar.Visible then Result:=Round(Result-VScrollBar.Width);
@@ -1132,20 +1203,20 @@ end;
 
 function TMultiHeaderGrid.ViewPortHeight: Integer;
 begin
-  Result:=Round(LocalRect.Height-2);
+  Result:=Round(LocalRect.Height-GridLineWidth);
   if HScrollPanel.Visible then Result:=Round(Result-HScrollPanel.Height);
 end;
 
 procedure TMultiHeaderGrid.VScrollBarChange(Sender: TObject);
 begin
   ViewTop:=Round(VScrollBar.Value);
-  InvalidateRect(LocalRect);
+  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.HScrollBarChange(Sender: TObject);
 begin
   ViewLeft:=Round(HScrollBar.Value);
-  InvalidateRect(LocalRect);
+  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.Paint;
@@ -1154,12 +1225,16 @@ var
 begin
   Canvas:=Self.Canvas;
 
+  if FWordWrap then begin
+    AutoSizeVisibleRows;
+  end;
+
   if Canvas.BeginScene then begin
     var Save:=Canvas.SaveState;
     try
       // Устанавливаем область обрезки
-      var R:=TRectF.Create(LocalRect.Left, LocalRect.Top,
-                           LocalRect.Left+LocalRect.Width, LocalRect.Top+LocalRect.Height);
+      var R:=TRectF.Create(LocalRect.Left,LocalRect.Top,
+                           LocalRect.Left+LocalRect.Width,LocalRect.Top+LocalRect.Height);
       if VScrollBar.Visible then R.Right:=R.Right-VScrollBar.Width;
       if HScrollPanel.Visible then R.Bottom:=R.Bottom-HScrollPanel.Height;
       Canvas.IntersectClipRect(R);
@@ -1190,17 +1265,17 @@ end;
 
 procedure TMultiHeaderGrid.DrawHeaders(Canvas: TCanvas);
 var
-  I, J: Integer;
+  i, j: Integer;
 begin
   Canvas.Stroke.Kind:=TBrushKind.Solid;
-  Canvas.Stroke.Color:=FGridLineColor;
+  Canvas.Stroke.Color:=FHeaderLineColor;
   Canvas.Stroke.Thickness:=FGridLineWidth/2;
 
   for i:=0 to FHeaderLevels.Count-1 do begin
-    J:=0;
+    j:=0;
     for var Element in FHeaderLevels[i] do begin
-      DrawHeaderCell(Canvas, I, J+Element.ColSkip);
-      J:=J+Element.ColSpan;
+      DrawHeaderCell(Canvas, i, j+Element.ColSkip);
+      j:=j+Element.ColSpan;
     end;
   end;
 end;
@@ -1259,7 +1334,7 @@ end;
 
 procedure TMultiHeaderGrid.DrawCells(Canvas: TCanvas);
 var
-  I, J       : Integer;
+  i, j       : Integer;
   Rect       : TRectF;
   MergedCell : TMergedCell;
 begin
@@ -1268,41 +1343,42 @@ begin
 
   if TopRow<0 then Exit;
 
-  for J:=TopRow to FRowCount-1 do begin
-    if FRowData[J].Top>ViewBottomCell then Break;
-    for I:=0 to FColCount-1 do begin
+  for j:=TopRow to FRowCount-1 do begin
+    if FRowData[j].Top>ViewBottomCell then Break;
+    for i:=0 to FColCount-1 do begin
 
       // Пропускаем объединенные ячейки (кроме первой)
-      if IsMergedCell(I, J, MergedCell) then begin
+      if IsMergedCell(i, j, MergedCell) then begin
         var FirstVisibleRow:=Max(MergedCell.Row,TopRow);
 
-        if (I=MergedCell.Col) and (J=FirstVisibleRow) then begin
+        if (i=MergedCell.Col) and (j=FirstVisibleRow) then begin
           Rect:=GetCellRect(MergedCell.Col, MergedCell.Row);
           // Корректируем прямоугольник для объединенной ячейки
           Rect.Right:=Rect.Left;
           Rect.Bottom:=Rect.Top;
           for var K:=0 to MergedCell.ColSpan-1 do
-            Rect.Right:=Rect.Right+GetColWidth(I+K);
+            Rect.Right:=Rect.Right+GetColWidth(i+K);
           for var K:=0 to MergedCell.RowSpan-1 do
-            Rect.Bottom:=Rect.Bottom+GetRowHeight(J+K);
+            Rect.Bottom:=Rect.Bottom+GetRowHeight(j+K);
 
           DrawCell(Canvas, MergedCell.Col, MergedCell.Row, Rect);
         end;
         Continue;
       end;
 
-      Rect:=GetCellRect(I, J);
-      DrawCell(Canvas, I, J, Rect);
+      Rect:=GetCellRect(i, j);
+      DrawCell(Canvas, i, j, Rect);
     end;
   end;
 end;
 
 procedure TMultiHeaderGrid.DrawCell(Canvas: TCanvas; ACol, ARow: Integer; ARect: TRectF);
 var
-  Handled    : Boolean;
-  Text       : string;
-  MergedCell : TMergedCell;
-  IsSelected : Boolean;
+  Handled         : Boolean;
+  Text            : string;
+  MergedCell      : TMergedCell;
+  IsSelected      : Boolean;
+  WordWrapEnabled : Boolean; // Добавлено: флаг переноса слов
 begin
   Handled:=False;
 
@@ -1312,7 +1388,6 @@ begin
     if (ACol<>MergedCell.Col) or (ARow<>MergedCell.Row) then Exit;
 
     // Проверяем, выделена ли основная ячейка этого блока
-
     IsSelected:=((MergedCell.Col<=FSelectedCell.X) and (MergedCell.Col+MergedCell.ColSpan>FSelectedCell.X) or FRowSelect) and
                  (MergedCell.Row<=FSelectedCell.Y) and (MergedCell.Row+MergedCell.RowSpan>FSelectedCell.Y);
 
@@ -1323,16 +1398,15 @@ begin
     // Корректируем прямоугольник для объединенной ячейки
     ARect.Right:=ARect.Left;
     ARect.Bottom:=ARect.Top;
-    for var I:=0 to MergedCell.ColSpan-1 do
-      ARect.Right:=ARect.Right+GetColWidth(ACol+I);
-    for var I:=0 to MergedCell.RowSpan-1 do
-      ARect.Bottom:=ARect.Bottom+GetRowHeight(ARow+I);
+    for var i:=0 to MergedCell.ColSpan-1 do
+      ARect.Right:=ARect.Right+GetColWidth(ACol+i);
+    for var i:=0 to MergedCell.RowSpan-1 do
+      ARect.Bottom:=ARect.Bottom+GetRowHeight(ARow+i);
 
     // Текст
     Text:=Cells[MergedCell.Col,MergedCell.Row];
   end else begin
     // Обычная ячейка
-
     IsSelected:=((ACol=FSelectedCell.X) or FRowSelect) and (ARow=FSelectedCell.Y);
 
     Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
@@ -1345,6 +1419,16 @@ begin
 
   if not Handled then begin
     var CellStyle:=CellStyle[ACol, ARow];
+
+    // Определяем, нужно ли использовать перенос слов
+    // Добавлено: логика определения WordWrap
+    if CellStyle.WordWrapIsSet then begin
+      WordWrapEnabled:=CellStyle.WordWrap;
+    end else if (ACol>=0) and (ACol<FColCount) then begin
+      WordWrapEnabled:=FWordWrap or FColData[ACol].WordWrap;
+    end else begin
+      WordWrapEnabled:=FWordWrap;
+    end;
 
     // Заливка
     if IsSelected then begin
@@ -1370,7 +1454,7 @@ begin
     end;
     Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
 
-    // Тескт
+    // Текст
     Canvas.Font.Assign(FCellFont);
 
     if CellStyle.FontNameIsSet then begin
@@ -1389,7 +1473,7 @@ begin
     end;
     var VAlignment:=ColTextVAlignment[ACol];
     if CellStyle.TextVAlignmentIsSet then begin
-      HAlignment:=CellStyle.TextVAlignment;
+      VAlignment:=CellStyle.TextVAlignment; // Исправлено: было HAlignment
     end;
 
     if IsSelected then begin
@@ -1408,19 +1492,31 @@ begin
       end;
     end;
 
-    // Корректировка области вывод для текста
-    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth/2;
-    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth/2;
-    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth/2;
-    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/2;
+    // Корректировка области вывода для текста
+    ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth/4;
+    ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth/4-1;
+    ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth/4;
+    if WordWrapEnabled then begin
+      case HAlignment of
+        TTextAlign.Center: begin
+          ARect.Left:=ARect.Left-1;
+          ARect.Right:=ARect.Right+1;
+        end;
+        TTextAlign.Leading: ARect.Right:=ARect.Right+2;
+        TTextAlign.Trailing: ARect.Left:=ARect.Left-2;
+      end;
+    end;
 
-    Canvas.FillText(ARect, Text, False, 1, [], HAlignment, VAlignment);
+    ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/4;
+
+    // Изменено: добавлен параметр WordWrapEnabled
+    Canvas.FillText(ARect, Text, WordWrapEnabled, 1, [], HAlignment, VAlignment);
   end;
 end;
 
 procedure TMultiHeaderGrid.DrawGridLines(Canvas: TCanvas);
 var
-  I, J: Integer;
+  i, j: Integer;
   X, Y: Single;
   StartX: Single;
   StartY: Single;
@@ -1434,8 +1530,8 @@ begin
   Canvas.Stroke.Thickness:=FGridLineWidth/2;
 
   // Вычисляем начальную Y-координату для данных (после заголовков)
-  StartX:=FGridLineWidth/2-ViewLeft;
-  StartY:=FGridLineWidth/2+HeaderHeight-ViewTop;
+  StartX:=FGridLineWidth/4-ViewLeft;
+  StartY:=-FGridLineWidth/4+HeaderHeight-ViewTop;
 
   var ViewBottomCell:=ViewBottom;
 
@@ -1445,71 +1541,71 @@ begin
   // Рисуем линии для данных (как раньше)
   // Сначала рисуем все вертикальные линии
   X:=StartX;
-  for I:=0 to FColCount do begin
+  for i:=0 to FColCount do begin
     // Внутренние вертикальные линии
-    for J:=TopRow to FRowCount-1 do begin
-      Y:=StartY+FRowData[J].Top;
-      if FRowData[J].Top>ViewBottomCell then Break;
+    for j:=TopRow to FRowCount-1 do begin
+      Y:=StartY+FRowData[j].Top;
+      if FRowData[j].Top>ViewBottomCell then Break;
 
       // Проверяем, не находится ли линия внутри объединенной ячейки
       var ShouldDraw:=True;
 
       // Проверяем ячейку слева
-      if IsMergedCell(I-1, J, MergedCell) then begin
-        if I<MergedCell.Col+MergedCell.ColSpan then
+      if IsMergedCell(i-1, j, MergedCell) then begin
+        if i<MergedCell.Col+MergedCell.ColSpan then
           ShouldDraw:=False;
       end;
 
       // Проверяем ячейку справа
-      if ShouldDraw and IsMergedCell(I, J, MergedCell) then begin
-        if I>MergedCell.Col then
+      if ShouldDraw and IsMergedCell(i, j, MergedCell) then begin
+        if i>MergedCell.Col then
           ShouldDraw:=False;
       end;
 
       if ShouldDraw then begin
-        Canvas.DrawLine(PointF(X, Y), PointF(X, Y+GetRowHeight(J)), 1);
+        Canvas.DrawLine(PointF(X, Y), PointF(X, Y+GetRowHeight(j)), 1);
       end;
     end;
 
-    if I<FColCount then
-      X:=X+GetColWidth(I);
+    if i<FColCount then
+      X:=X+GetColWidth(i);
   end;
 
   // Затем рисуем все горизонтальные линии
-  for I:=TopRow to FRowCount do begin
-    if I=0 then begin
-      Y:=StartY+FRowData[I].Top;
+  for i:=TopRow to FRowCount do begin
+    if i=0 then begin
+      Y:=StartY+FRowData[i].Top;
     end else begin
-      Y:=StartY+FRowData[I-1].Top+FRowData[I-1].Height;
+      Y:=StartY+FRowData[i-1].Top+FRowData[i-1].Height;
     end;
 
-    if (I>0) and (FRowData[I-1].Top>ViewBottomCell) then Break;
+    if (i>0) and (FRowData[i-1].Top>ViewBottomCell) then Break;
 
     X:=StartX;
-    for J:=0 to FColCount-1 do begin
+    for j:=0 to FColCount-1 do begin
       // Проверяем, не находится ли линия внутри объединенной ячейки
       var ShouldDraw:=True;
       // Внутренние горизонтальные линии
 
       // Проверяем ячейку сверху
-      if IsMergedCell(J, I-1, MergedCell) then begin
-        if I<MergedCell.Row+MergedCell.RowSpan then begin
+      if IsMergedCell(j, i-1, MergedCell) then begin
+        if i<MergedCell.Row+MergedCell.RowSpan then begin
           ShouldDraw:=False;
         end;
       end;
 
       // Проверяем ячейку снизу
-      if ShouldDraw and IsMergedCell(J, I, MergedCell) then begin
-        if I>MergedCell.Row then begin
+      if ShouldDraw and IsMergedCell(j, i, MergedCell) then begin
+        if i>MergedCell.Row then begin
           ShouldDraw:=False;
         end;
       end;
 
       if ShouldDraw then begin
-        Canvas.DrawLine(PointF(X, Y), PointF(X+GetColWidth(J), Y), 1);
+        Canvas.DrawLine(PointF(X, Y), PointF(X+GetColWidth(j), Y), 1);
       end;
 
-      X:=X+GetColWidth(J);
+      X:=X+GetColWidth(j);
     end;
   end;
 end;
@@ -1584,6 +1680,7 @@ begin
       end;
     end;
   end;
+  Invalidate;
 end;
 
 function TMultiHeaderGrid.IsMergedCell(ACol, ARow: Integer): Boolean;
@@ -1627,7 +1724,6 @@ begin
   AutoSizeCols(ForcePrecise);
   AutoSizeRows(ForcePrecise);
   UpdateSize;
-  InvalidateRect(LocalRect);
 end;
 
 function CountLines(const Text: string): Integer;
@@ -1666,7 +1762,7 @@ begin
     // Ищем конец строки
     EndPos:=Pos(#13#10, Text, StartPos);
 
-    if EndPos = 0 then begin
+    if EndPos=0 then begin
       // Это последняя строка
       LineLength:=Length(Text)-StartPos+1;
       if LineLength>Result then
@@ -1702,7 +1798,7 @@ begin
     // Ищем конец строки
     EndPos:=Pos(#13#10, Text, StartPos);
 
-    if EndPos = 0 then begin
+    if EndPos=0 then begin
       // Это последняя строка
       LineLength:=Length(Text)-StartPos+1;
       if LineLength>Length(Result) then
@@ -1725,23 +1821,25 @@ begin
   end;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeCols(ForcePrecise: boolean = False);
+procedure TMultiHeaderGrid.AutoSizeCols(ForcePrecise:boolean=False);
 var
-  I, J: Integer;
-  MaxWidth: Single;
-  Text: string;
+  i,j:Integer;
+  MaxWidth:Single;
+  Text:string;
 begin
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
-  var CellDelimterWidth:=FGridLineWidth;
-  var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth;
-  var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
+  var CellDelimterWidth:=FGridLineWidth/2;
+  var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth+1;
 
-  for I:=0 to FColCount-1 do begin
+  // Оптимизация: если нет WordWrap, используем быстрый режим
+  var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
+
+  for i:=0 to FColCount-1 do begin
     MaxWidth:=0;
 
     // Проверяем заголовки
-    for J:=0 to FHeaderLevels.Count-1 do begin
-      var Element:=FHeaderLevels.GetElementAtCell(I,J);
+    for j:=0 to FHeaderLevels.Count-1 do begin
+      var Element:=FHeaderLevels.GetElementAtCell(i,j);
       if not Assigned(Element) then Continue;
 
       var Lines:=Element.Caption.Split([#13#10]);
@@ -1762,30 +1860,31 @@ begin
       end;
     end;
 
-    Canvas.Font.Assign(Self.CellFont);
-    Canvas.Font.Assign(FCellFont);
-    var FLetterWidth:=Canvas.TextWidth('V');
+    // Оптимизация: если в этом столбце нет WordWrap, используем оригинальную быструю логику
+    var ColHasWordWrap:=FWordWrap or FColData[i].WordWrap or FGridCellsHasWordWrap;
 
-    // Проверяем ячейки
+    if not ColHasWordWrap and UseFastMode then begin
+      // Быстрый режим
+      Canvas.Font.Assign(FCellFont);
+      var FLetterWidth:=Canvas.TextWidth('V');
+      var MaxLetters:=0.0;
 
-    var MaxLetters:=0.0;
-    for J:=0 to FRowCount-1 do begin
-      var ColSpan:=1;
-      var MergedCell: TMergedCell;
-      if IsMergedCell(I,J,MergedCell) then begin
-        Text:=Cells[MergedCell.Col,MergedCell.Row];
-        ColSpan:=MergedCell.ColSpan;
-      end else begin
-        Text:=Cells[I, J];
-      end;
+      for j:=0 to FRowCount-1 do begin
+        var ColSpan:=1;
+        var MergedCell:TMergedCell;
+        if IsMergedCell(i,j,MergedCell) then begin
+          Text:=Cells[MergedCell.Col,MergedCell.Row];
+          ColSpan:=MergedCell.ColSpan;
+        end else begin
+          Text:=Cells[i,j];
+        end;
 
-      if FastMode then begin
         var Letters:=GetMaxLineLength(Text)/ColSpan;
         if Letters>MaxLetters then begin
           MaxLetters:=Letters;
           var Line:=GetMaxLine(Text);
 
-          var CellStyle:=CellStyle[I, J];
+          var CellStyle:=CellStyle[i,j];
           Canvas.Font.Assign(FCellFont);
           if CellStyle.FontNameIsSet then begin
             Canvas.Font.Family:=CellStyle.FontName;
@@ -1797,10 +1896,36 @@ begin
             Canvas.Font.Style:=CellStyle.FontStyle;
           end;
 
-          MaxWidth:=Max(MaxWidth, Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
+          MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
         end;
-      end else begin
-        var CellStyle:=CellStyle[I, J];
+      end;
+    end else begin
+      // Полный режим (с проверкой WordWrap)
+      for j:=0 to FRowCount-1 do begin
+        var ColSpan:=1;
+        var MergedCell:TMergedCell;
+        var IsMerged:=IsMergedCell(i,j,MergedCell);
+        var ActualCol:Integer;
+
+        if IsMerged then begin
+          Text:=Cells[MergedCell.Col,MergedCell.Row];
+          ColSpan:=MergedCell.ColSpan;
+          ActualCol:=MergedCell.Col;
+        end else begin
+          Text:=Cells[i,j];
+          ActualCol:=i;
+        end;
+
+        var CellStyle:=CellStyle[ActualCol,j];
+
+        // Определяем, включен ли перенос слов для этой ячейки
+        var WordWrapEnabled: Boolean;
+        if CellStyle.WordWrapIsSet then begin
+          WordWrapEnabled:=CellStyle.WordWrap;
+        end else begin
+          WordWrapEnabled:=FWordWrap or FColData[i].WordWrap;
+        end;
+
         Canvas.Font.Assign(FCellFont);
         if CellStyle.FontNameIsSet then begin
           Canvas.Font.Family:=CellStyle.FontName;
@@ -1812,9 +1937,22 @@ begin
           Canvas.Font.Style:=CellStyle.FontStyle;
         end;
 
-        var Lines:=Text.Split([#13#10]);
-        for var Line in Lines do begin
-          MaxWidth:=Max(MaxWidth, Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
+        if WordWrapEnabled then begin
+          // При WordWrap измеряем ширину самого длинного слова
+          var Words:=Text.Split([' ',':',';','.','-',',',#9]);
+          var MaxWordWidth:=0.0;
+          for var Word in Words do begin
+            if Word<>'' then begin
+              MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+            end;
+          end;
+          MaxWidth:=Max(MaxWidth,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+        end else begin
+          // Без WordWrap измеряем все строки
+          var Lines:=Text.Split([#13#10]);
+          for var Line in Lines do begin
+            MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          end;
         end;
       end;
     end;
@@ -1823,69 +1961,84 @@ begin
     MaxWidth:=MaxWidth+CellPaddingFull;
 
     // Устанавливаем новую ширину
-    FColWidths[I]:=Trunc(MaxWidth);
+    var NewWidth:=Trunc(MaxWidth);
+    if NewWidth<FDefaultColWidth then
+      NewWidth:=FDefaultColWidth;
+
+    FColData[i].Widths:=NewWidth;
   end;
+  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False);
 begin
+  AutoSizeRows(0, FRowCount-1, ForcePrecise);
+end;
+
+type
+  TSizeComputeMode = (cmFast,cmSlow,cmFull);
+
+procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False);
+begin
   Canvas.Font.Assign(FCellFont);
 
   var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
-  var CellDelimterHeight:=FGridLineWidth/2;
-  var CellPaddingHeightFull:=CellPaddingHeight+CellDelimterHeight/2;
-  var FastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
+  var CellDelimterHeight:=FGridLineWidth;
+  var ViewBottomCell:=ViewBottom;
 
+  var ComputeMode:=TSizeComputeMode.cmSlow;
+  if FRowCount*FColCount>10000 then begin
+    ComputeMode:=TSizeComputeMode.cmFast;
+  end;
+  if ForcePrecise then begin
+    ComputeMode:=TSizeComputeMode.cmSlow;
+  end;
+  if FWordWrap or FGridCellsHasWordWrap then begin
+    ComputeMode:=TSizeComputeMode.cmFull;
+  end;
 
-  if FastMode then begin
-    Canvas.Font.Assign(FCellFont);
-    var TH:=Canvas.TextHeight('А');
-    for var Row:=0 to FRowCount-1 do begin
-      var MaxHeight:=TH+CellDelimterHeight;
-      for var Col:=0 to FColCount-1 do begin
-        var RowSpan:=1;
-        var MergedCell: TMergedCell;
-        var TextLines: Single;
-        if IsMergedCell(Col,Row,MergedCell) then begin
-          TextLines:=CountLines(Cells[MergedCell.Col,MergedCell.Row]);
-          RowSpan:=MergedCell.RowSpan;
-        end else begin
-          TextLines:=CountLines(Cells[Col,Row]);
-        end;
+  Canvas.Font.Assign(FCellFont);
+  var TH:=Canvas.TextHeight('А');
+  var Text:='';
+  for var Row:=FromRow to FRowCount-1 do begin
+    if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
+       ((ToRow>=0) and (Row>ToRow)) then Break;
+    var MaxHeight:=0.0;
+    for var Col:=0 to FColCount-1 do begin
 
-        var CellStyle:=CellStyle[Col,Row];
-        var ResTH:=TH;
-        if CellStyle.FontSizeIsSet then begin
-          ResTH:=ResTH/Canvas.Font.Size*CellStyle.FontSize;
-        end;
-        if CellStyle.FontStyleIsSet then begin
-          if (TFontStyle.fsBold in CellStyle.FontStyle) xor (TFontStyle.fsBold in Canvas.Font.Style) then begin
-            if TFontStyle.fsBold in CellStyle.FontStyle then begin
-              ResTH:=ResTH*1.1;
-            end else begin
-              ResTH:=ResTH*0.9;
+      var RowSpan:=1;
+      var MergedCell: TMergedCell;
+      var TextLines: Single;
+      if IsMergedCell(Col,Row,MergedCell) then begin
+        TextLines:=Max(CountLines(Cells[MergedCell.Col,MergedCell.Row]),1);
+        RowSpan:=MergedCell.RowSpan;
+      end else begin
+        TextLines:=Max(CountLines(Cells[Col,Row]),1);
+      end;
+
+      case ComputeMode of
+        cmFast: begin
+          // Быстрый рассчет
+
+          var CellStyle:=CellStyle[Col,Row];
+          var ResTH:=TH;
+          if CellStyle.FontSizeIsSet then begin
+            ResTH:=ResTH/Canvas.Font.Size*CellStyle.FontSize;
+          end;
+          if CellStyle.FontStyleIsSet then begin
+            if (TFontStyle.fsBold in CellStyle.FontStyle) xor (TFontStyle.fsBold in Canvas.Font.Style) then begin
+              if TFontStyle.fsBold in CellStyle.FontStyle then begin
+                ResTH:=ResTH*1.1;
+              end else begin
+                ResTH:=ResTH*0.9;
+              end;
             end;
           end;
-        end;
 
-        MaxHeight:=Max(MaxHeight,TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight);
-      end;
-      FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeightFull);
-    end;
-  end else begin
-    for var Row:=0 to FRowCount-1 do begin
-      var MaxHeight:=0.0;
-      for var Col:=0 to FColCount-1 do begin
-        var RowSpan:=1;
-        var MergedCell: TMergedCell;
-        var TextLines: Single;
-        var TH: Single;
-        if IsMergedCell(Col,Row,MergedCell) then begin
-          TextLines:=CountLines(Cells[MergedCell.Col,MergedCell.Row]);
-          RowSpan:=MergedCell.RowSpan;
-          TH:=Canvas.TextHeight('А');
-        end else begin
-          TextLines:=CountLines(Cells[Col,Row]);
+          MaxHeight:=Max(MaxHeight,TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+        end;
+        cmSlow: begin
+          // Обычный рассчет
 
           var CellStyle:=CellStyle[Col,Row];
           Canvas.Font.Assign(FCellFont);
@@ -1898,34 +2051,100 @@ begin
           if CellStyle.FontStyleIsSet then begin
             Canvas.Font.Style:=CellStyle.FontStyle;
           end;
-          TH:=Canvas.TextHeight('А');
+
+          MaxHeight:=Max(MaxHeight,TextLines*Canvas.TextHeight('А')/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
 
-        MaxHeight:=Max(MaxHeight,TextLines*TH/RowSpan-(RowSpan-1)*CellDelimterHeight);
-      end;
+        cmFull: begin
+          // Рассчет с учетом WordWrap, медленно.
 
-      FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeightFull);
+          var AvailableWidth:=GetCellRect(Col,Row,MergedCell).Width;
+
+          var ActualCol: integer;
+          var ActualRow: integer;
+          if (MergedCell.ColSpan>1) or (MergedCell.RowSpan>1) then begin
+            Text:=Cells[MergedCell.Col,MergedCell.Row];
+            RowSpan:=MergedCell.RowSpan;
+            ActualCol:=MergedCell.Col;
+            ActualRow:=MergedCell.Row;
+          end else begin
+            Text:=Cells[Col,Row];
+            ActualCol:=Col;
+            ActualRow:=Row;
+          end;
+
+          var CellStyle:=CellStyle[ActualCol,ActualRow];
+
+          // Определяем, включен ли перенос слов
+          var WordWrapEnabled: Boolean;
+          if CellStyle.WordWrapIsSet then begin
+            WordWrapEnabled:=CellStyle.WordWrap;
+          end else begin
+            WordWrapEnabled:=FWordWrap or FColData[ActualCol].WordWrap;
+          end;
+
+          // Настраиваем шрифт
+          Canvas.Font.Assign(FCellFont);
+          if CellStyle.FontNameIsSet then begin
+            Canvas.Font.Family:=CellStyle.FontName;
+          end;
+          if CellStyle.FontSizeIsSet then begin
+            Canvas.Font.Size:=CellStyle.FontSize;
+          end;
+          if CellStyle.FontStyleIsSet then begin
+            Canvas.Font.Style:=CellStyle.FontStyle;
+          end;
+
+          var TextHeight:Single;
+          if WordWrapEnabled and (Text<>'') then begin
+            // Используем MeasureText для расчета
+            var MeasureRect:=TRectF.Create(0,0,AvailableWidth,10000);
+            Canvas.MeasureText(MeasureRect,Text,True,[],TTextAlign.Leading,TTextAlign.Leading);
+            TextHeight:=MeasureRect.Height;
+          end else begin
+            // Без WordWrap считаем переводы строк
+            var LineCount:=CountLines(Text);
+            TextHeight:=Canvas.TextHeight('А')*LineCount-LineCount*FGridLineWidth;
+          end;
+
+          // Корректируем высоту
+          MaxHeight:=Max(MaxHeight,TextHeight/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+        end;
+      end;
+    end;
+
+    FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+    if Row>0 then begin
+      FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
     end;
   end;
 
   for var Row:=1 to FRowCount-1 do begin
     FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
   end;
+  Invalidate;
 end;
+
+procedure TMultiHeaderGrid.AutoSizeVisibleRows;
+begin
+  AutoSizeRows(RowAtHeightCoord(ViewTop), -1, True);
+end;
+
 
 procedure TMultiHeaderGrid.ScrollToSelectedCell;
 begin
   if (FSelectedCell.X>=0) and (FSelectedCell.Y>=0) then begin
 
     var Rect:=GetMergedCellRect(FSelectedCell.X,FSelectedCell.Y);
+    Rect.Right:=Rect.Right+FGridLineWidth/2;
     Rect.Offset(ViewLeft,ViewTop-HeaderHeight);
 
     if Rect.Left<ViewLeft then begin
-      ViewLeft:=Trunc(Rect.Left-FGridLineWidth/2);
+      ViewLeft:=Trunc(Rect.Left);
     end;
 
-    if Rect.Right>ViewLeft+ViewPortDataWidth then begin
-      ViewLeft:=Trunc(Rect.Right-ViewPortDataWidth+FGridLineWidth);
+    if Rect.Right>ViewLeft+ViewPortWidth then begin
+      ViewLeft:=Trunc(Rect.Right-ViewPortWidth)+1;
     end;
 
     if Rect.Top<ViewTop then begin
@@ -1933,11 +2152,11 @@ begin
     end;
 
     if (Rect.Bottom>ViewBottom-FGridLineWidth) then begin
-      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-FGridLineWidth/2);
+      ViewTop:=Round(Rect.Bottom-ViewCellsHeight-FGridLineWidth/2)+1;
     end;
-  end;
 
-  InvalidateRect(LocalRect);
+  end;
+  Invalidate;
 end;
 
 
@@ -1945,86 +2164,69 @@ procedure TMultiHeaderGrid.MouseDown(Button: TMouseButton; Shift: TShiftState; X
 var
   StartCol, EndCol : Integer;
   Row              : Integer;
-  I, J             : Integer;
+  i, j             : Integer;
   Rect             : TRectF;
-  ClickedHeader    : Boolean;
   MergedCell       : TMergedCell;
 begin
   inherited;
-
   FLastClickIsOnCell:=False;
 
- // Устанавливаем фокус при клике
   if CanFocus and (Button=TMouseButton.mbLeft) then begin
-    SetFocus; // Устанавливаем фокус
-    InvalidateRect(LocalRect);
+    // Устанавливаем фокус при клике
+    SetFocus;
+    Invalidate;
   end;
 
   if Button=TMouseButton.mbLeft then begin
-    ClickedHeader:=False;
-
+    // Проверяем клик по заголовкам
     if FResizeEnabled then begin
-      case IsResizeArea(X, Y, StartCol, EndCol, Row) of
-        TResizeMode.rmColumn: begin
-          StartColumnResize(StartCol, EndCol, X);
+      var ResizeMode:=IsResizeArea(X, Y, StartCol, EndCol, Row);
 
-          // Захватываем мышь для продолжения перетаскивания за пределами компонента
-          Capture;
-          Exit;
-        end;
-        TResizeMode.rmHeaderRow: begin
-          StartHeaderRowResize(Row, Y);
+      case ResizeMode of
+        TResizeMode.rmColumn: StartColumnResize(StartCol, EndCol, X);
+        TResizeMode.rmHeaderRow: StartHeaderRowResize(Row, Y);
+        TResizeMode.rmGridRow: StartGridRowResize(Row, Y);
+      end;
 
-          // Захватываем мышь для продолжения перетаскивания за пределами компонента
-          Capture;
-          Exit;
-        end;
-        TResizeMode.rmGridRow: begin
-          StartGridRowResize(Row, Y);
-
-          // Захватываем мышь для продолжения перетаскивания за пределами компонента
-          Capture;
-          Exit;
-        end;
+      if ResizeMode<>TResizeMode.rmNone then begin
+        // Захватываем мышь для продолжения перетаскивания за пределами компонента
+        Capture;
+        Exit;
       end;
     end;
 
     // Проверяем клик по заголовкам
-    for I:=0 to FHeaderLevels.Count-1 do begin
-      J:=0;
-      while J<FColCount do begin
-        Rect:=GetHeaderRect(I, J);
+    for i:=0 to FHeaderLevels.Count-1 do begin
+      j:=0;
+      while j<FColCount do begin
+        Rect:=GetHeaderRect(i, j);
         if Rect.Contains(PointF(X, Y)) then begin
           // Проверяем, является ли это объединенной ячейкой
-          DoHeaderClick(I, J);
-          ClickedHeader:=True;
-          Break;
+          DoHeaderClick(i, j);
+          Exit;
         end;
-        J:=J+FHeaderLevels.GetElementAtCell(j,I).ColSpan;
+        var ColSpan:=FHeaderLevels.GetElementAtCell(j,i).ColSpan;
+        if ColSpan<0 then ColSpan:=FColCount;
+        j:=j+ColSpan;
       end;
-      if ClickedHeader then
-        Break;
     end;
 
-    // Если не кликнули по заголовку, проверяем ячейки данных
-    if not ClickedHeader then begin
+    // Проверяем ячейки данных
+    var TopRow:=RowAtHeightCoord(ViewTop);
+    if TopRow<0 then Exit;
+    var ViewBottom:=ViewTop+LocalRect.Top+LocalRect.Height+Margins.Bottom-HeaderHeight;
 
-      var TopRow:=RowAtHeightCoord(ViewTop);
-      if TopRow<0 then Exit;
-      var ViewBottom:=ViewTop+LocalRect.Top+LocalRect.Height+Margins.Bottom-HeaderHeight;
-
-      for J:=TopRow to FRowCount-1 do begin
-        if FRowData[J].Top>ViewBottom then Break;
-        for I:=0 to FColCount-1 do begin
-          Rect:=GetCellRect(I, J);
-          if Rect.Contains(PointF(X, Y)) then begin
-            FLastClickIsOnCell:=True;
-            FSelectedCell:=Point(I, J);
-            DoCellClick(FSelectedCell.X, FSelectedCell.Y);
-            ScrollToSelectedCell;
-            DoSelectCell;
-            Exit;
-          end;
+    for j:=TopRow to FRowCount-1 do begin
+      if FRowData[j].Top>ViewBottom then Break;
+      for i:=0 to FColCount-1 do begin
+        Rect:=GetCellRect(i, j);
+        if Rect.Contains(PointF(X, Y)) then begin
+          FLastClickIsOnCell:=True;
+          FSelectedCell:=Point(i, j);
+          DoCellClick(FSelectedCell.X, FSelectedCell.Y);
+          ScrollToSelectedCell;
+          DoSelectCell;
+          Exit;
         end;
       end;
     end;
@@ -2044,41 +2246,41 @@ begin
       TResizeMode.rmColumn: begin
         if FResizeEndColumnIndex>=0 then begin
           // Используем глобальные координаты для точного отслеживания
-          GlobalPos := LocalToAbsolute(PointF(X, Y));
-          NewWidth := ResizeStartWidth + Round(GlobalPos.X - FResizeStartPos.X);
+          GlobalPos:=LocalToAbsolute(PointF(X, Y));
+          NewWidth:=ResizeStartWidth+Round(GlobalPos.X-FResizeStartPos.X);
           UpdateColumnWidth(FResizeStartColumnIndex,FResizeEndColumnIndex, NewWidth);
-          Cursor := crHSplit;
+          Cursor:=crHSplit;
         end;
       end;
       TResizeMode.rmHeaderRow: begin
         if FResizeRowIndex>=0 then begin
           // Используем глобальные координаты для точного отслеживания
-          GlobalPos := LocalToAbsolute(PointF(X, Y));
-          NewHeight := FResizeStartHeight + Round(GlobalPos.Y - FResizeStartPos.Y);
+          GlobalPos:=LocalToAbsolute(PointF(X, Y));
+          NewHeight:=FResizeStartHeight+Round(GlobalPos.Y-FResizeStartPos.Y);
           UpdateHeaderRowHeight(FResizeRowIndex, NewHeight);
-          Cursor := crVSplit;
+          Cursor:=crVSplit;
         end;
       end;
       TResizeMode.rmGridRow: begin
         if FResizeRowIndex>=0 then begin
           // Используем глобальные координаты для точного отслеживания
-          GlobalPos := LocalToAbsolute(PointF(X, Y));
-          NewHeight := FResizeStartHeight + Round(GlobalPos.Y - FResizeStartPos.Y);
+          GlobalPos:=LocalToAbsolute(PointF(X, Y));
+          NewHeight:=FResizeStartHeight+Round(GlobalPos.Y-FResizeStartPos.Y);
           UpdateRowHeight(FResizeRowIndex, NewHeight);
-          Cursor := crVSplit;
+          Cursor:=crVSplit;
         end;
       end
       else begin
         case IsResizeArea(X, Y, Col, Col, Row) of
-          TResizeMode.rmColumn: Cursor := crHSplit;
-          TResizeMode.rmHeaderRow: Cursor := crVSplit;
-          TResizeMode.rmGridRow: Cursor := crVSplit;
-          else Cursor := crDefault;
+          TResizeMode.rmColumn: Cursor:=crHSplit;
+          TResizeMode.rmHeaderRow: Cursor:=crVSplit;
+          TResizeMode.rmGridRow: Cursor:=crVSplit;
+          else Cursor:=crDefault;
         end;
       end;
     end;
   end else begin
-    Cursor := crDefault;
+    Cursor:=crDefault;
   end;
 end;
 
@@ -2086,7 +2288,7 @@ procedure TMultiHeaderGrid.MouseUp(Button: TMouseButton; Shift: TShiftState; X, 
 begin
   inherited;
 
-  if (Button = TMouseButton.mbLeft) then begin
+  if (Button=TMouseButton.mbLeft) then begin
     // Завершаем изменение размера столбца
     if FResizeMode<>TResizeMode.rmNone then begin
       DoColumnResized;
@@ -2094,7 +2296,7 @@ begin
       FResizeEndColumnIndex:=-1;
       FResizeRowIndex:=-1;
       FResizeMode:=TResizeMode.rmNone;
-      Cursor := crDefault;
+      Cursor:=crDefault;
     end;
   end;
 end;
@@ -2117,18 +2319,16 @@ begin
   end else begin
     ViewTop:=Min(ViewTop+WheelDelta,FullTableHeight);
   end;
-  InvalidateRect(LocalRect);
+  Invalidate;
 end;
 
 procedure CopyTextToClipboard(const AText: string);
 var
   ClipboardService: IFMXClipboardService;
 begin
-  if TPlatformServices.Current.SupportsPlatformService(IFMXClipboardService, IInterface(ClipboardService)) then
-  begin
+  if TPlatformServices.Current.SupportsPlatformService(IFMXClipboardService, IInterface(ClipboardService)) then begin
     ClipboardService.SetClipboard(AText);
-  end
-  else
+  end else
     raise Exception.Create('Сервис буфера обмена не поддерживается');
 end;
 
@@ -2140,8 +2340,7 @@ var
   MergedCellNew    : TMergedCell;
 begin
 
-  if IsFocused then
-  begin
+  if IsFocused then begin
     var DX:=0;
     var DY:=0;
 
@@ -2177,7 +2376,7 @@ begin
       vkEscape: begin
         FSelectedCell:=Point(-1, -1);
         DoSelectCell;
-        InvalidateRect(LocalRect);
+        Invalidate;
         Exit;
       end;
       vkC,vkInsert: begin
@@ -2242,41 +2441,36 @@ var
 begin
   Result:=-1;
 
-  if Length(FRowData) = 0 then
+  if Length(FRowData)=0 then
     Exit;
 
   // Быстрая проверка граничных случаев
-  if Y < FRowData[0].Top then
+  if Y<FRowData[0].Top then
     Exit;
 
   // Проверка последнего элемента
-  CurrentBottom:=FRowData[High(FRowData)].Top + FRowData[High(FRowData)].Height;
-  if Y >= CurrentBottom then
+  CurrentBottom:=FRowData[High(FRowData)].Top+FRowData[High(FRowData)].Height;
+  if Y>=CurrentBottom then
     Exit(High(FRowData)); // или -1, в зависимости от требований
 
   // Бинарный поиск с целочисленной арифметикой
   L:=0;
   R:=High(FRowData);
 
-  while L <= R do
-  begin
-    M:=(L + R) shr 1; // Быстрее, чем div 2
+  while L<=R do begin
+    M:=(L+R) shr 1; // Быстрее, чем div 2
 
     CurrentTop:=FRowData[M].Top;
-    CurrentBottom:=CurrentTop + FRowData[M].Height;
+    CurrentBottom:=CurrentTop+FRowData[M].Height;
 
-    if Y >= CurrentTop then
-    begin
-      if Y < CurrentBottom then
-      begin
+    if Y>=CurrentTop then begin
+      if Y<CurrentBottom then begin
         Result:=M;
         Exit;
-      end
-      else
-        L:=M + 1;
-    end
-    else
-      R:=M - 1;
+      end else
+        L:=M+1;
+    end else
+      R:=M-1;
   end;
 end;
 
@@ -2312,8 +2506,10 @@ end;
 
 procedure TMultiHeaderGrid.DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle);
 begin
-  if Assigned(FOnSetCellStyle) then
+  if Assigned(FOnSetCellStyle) then begin
     FOnSetCellStyle(Self, ACol, ARow, Style);
+    if Style.WordWrapIsSet and Style.WordWrap then FGridCellsHasWordWrap:=True;
+  end;
 end;
 
 
@@ -2333,7 +2529,7 @@ procedure TMultiHeaderGrid.SetGridLines(const Value: Boolean);
 begin
   if FGridLines<>Value then begin
     FGridLines:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2341,7 +2537,7 @@ procedure TMultiHeaderGrid.SetGridLineColor(const Value: TAlphaColor);
 begin
   if FGridLineColor<>Value then begin
     FGridLineColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2349,7 +2545,7 @@ procedure TMultiHeaderGrid.SetGridLineWidth(const Value: Single);
 begin
   if FGridLineWidth<>Value then begin
     FGridLineWidth:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2358,7 +2554,7 @@ begin
   if (FSelectedCell.X<>Value.X) or (FSelectedCell.Y<>Value.Y) then begin
     FSelectedCell:=Value;
     DoSelectCell;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2366,7 +2562,7 @@ procedure TMultiHeaderGrid.SetSelectedCellColor(const Value: TAlphaColor);
 begin
   if FSelectedCellColor<>Value then begin
     FSelectedCellColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2374,7 +2570,7 @@ procedure TMultiHeaderGrid.SetSelectedFontColor(const Value: TAlphaColor);
 begin
   if FSelectedFontColor<>Value then begin
     FSelectedFontColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2382,7 +2578,7 @@ procedure TMultiHeaderGrid.SetCellFont(const Value: TFont);
 begin
   if FCellFont<>Value then begin
     FCellFont.Assign(Value);
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2390,7 +2586,7 @@ procedure TMultiHeaderGrid.SetCellFontColor(const Value: TAlphaColor);
 begin
   if FCellFontColor<>Value then begin
     FCellFontColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2398,7 +2594,7 @@ procedure TMultiHeaderGrid.SetCellPadding(const Value: TBounds);
 begin
   if FCellPadding<>Value then begin
     FCellPadding:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2416,7 +2612,7 @@ procedure TMultiHeaderGrid.SetCellColor(const Value: TAlphaColor);
 begin
   if FCellColor<>Value then begin
     FCellColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2424,7 +2620,7 @@ procedure TMultiHeaderGrid.SetHeaderFont(const Value: TFont);
 begin
   if FHeaderFont<>Value then begin
     FHeaderFont.Assign(Value);
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2432,7 +2628,7 @@ procedure TMultiHeaderGrid.SetHeaderCellColor(const Value: TAlphaColor);
 begin
   if FHeaderCellColor<>Value then begin
     FHeaderCellColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2440,7 +2636,24 @@ procedure TMultiHeaderGrid.SetHeaderFontColor(const Value: TAlphaColor);
 begin
   if FHeaderFontColor<>Value then begin
     FHeaderFontColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetHeaderLineColor(const Value: TAlphaColor);
+begin
+  if FHeaderLineColor<>Value then begin
+    FHeaderLineColor:=Value;
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetHorisontalScroll(const Value: TScrollShowMode);
+begin
+  if FHorisontalScroll<>Value then begin
+    FHorisontalScroll:=Value;
+    UpdateSize;
+    Invalidate;
   end;
 end;
 
@@ -2448,7 +2661,7 @@ procedure TMultiHeaderGrid.SetCellColorAlternate(const Value: TAlphaColor);
 begin
   if FCellColorAlternate<>Value then begin
     FCellColorAlternate:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -2456,20 +2669,32 @@ procedure TMultiHeaderGrid.SetBackgroundColor(const Value: TAlphaColor);
 begin
   if FBackgroundColor<>Value then begin
     FBackgroundColor:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetVerticalScroll(const Value: TScrollShowMode);
+begin
+  if FVerticalScroll<>Value then begin
+    FVerticalScroll:=Value;
+    UpdateSize;
+    Invalidate;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetViewLeft(const Value: integer);
 begin
-  var LastColLeft:=FullTableWidth-FColWidths[FColCount-1];
+  var LastColLeft:=FullTableWidth-FColData[FColCount-1].Widths;
   FViewLeft:=Min(LastColLeft,Max(0,Value));
 
+  var Event:=HScrollBar.OnChange;
+  HScrollBar.OnChange:=nil;
   HScrollBar.Value:=Value;
+  HScrollBar.OnChange:=Event;
 
   DoGridScroll;
 
-  InvalidateRect(LocalRect);
+  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.SetViewTop(const Value: integer);
@@ -2477,13 +2702,14 @@ begin
   var BottomCellTop:=FRowData[High(FRowData)].Top;
   FViewTop:=Min(BottomCellTop,Max(0,Value));
 
-  VScrollBar.BeginUpdate;
+  var Event:=VScrollBar.OnChange;
+  VScrollBar.OnChange:=nil;
   VScrollBar.Value:=Value;
-  VScrollBar.EndUpdate;
+  VScrollBar.OnChange:=Event;
 
   DoGridScroll;
 
-  InvalidateRect(LocalRect);
+  Invalidate;
 end;
 
 function TMultiHeaderGrid.CanObserve(const ID: Integer): Boolean;
@@ -2665,6 +2891,17 @@ begin
   FTextVAlignmentIsSet:=Value;
 end;
 
+procedure TCellStyle.SetWordWrap(const Value: Boolean);
+begin
+  FWordWrap:=Value;
+  FWordWrapIsSet:=True;
+end;
+
+procedure TCellStyle.SetWordWrapIsSet(const Value: Boolean);
+begin
+  FWordWrapIsSet:=Value;
+end;
+
 { TMultiHeaderStringGrid }
 
 constructor TMultiHeaderStringGrid.Create(AOwner: TComponent);
@@ -2731,45 +2968,44 @@ end;
 
 procedure TMultiHeaderGrid.SetResizeEnabled(const Value: Boolean);
 begin
-  if FResizeEnabled <> Value then begin
-    FResizeEnabled := Value;
+  if FResizeEnabled<>Value then begin
+    FResizeEnabled:=Value;
     // Сбрасываем состояние изменения размера при отключении
     if not Value then begin
       FResizeStartColumnIndex:=-1;
       FResizeEndColumnIndex:=-1;
-      FResizeRowIndex := -1;
+      FResizeRowIndex:=-1;
       ReleaseCapture; // Освобождаем захват мыши
-      Cursor := crDefault;
+      Cursor:=crDefault;
     end;
   end;
 end;
 
 function TMultiHeaderGrid.GetResizeMargin: Integer;
 begin
-  Result := FResizeMargin;
+  Result:=FResizeMargin;
 end;
 
 procedure TMultiHeaderGrid.SetResizeMargin(const Value: Integer);
 begin
-  if FResizeMargin <> Value then
-  begin
-    FResizeMargin := Value;
-    if FResizeMargin < 1 then
-      FResizeMargin := 1;
+  if FResizeMargin<>Value then begin
+    FResizeMargin:=Value;
+    if FResizeMargin<1 then
+      FResizeMargin:=1;
   end;
 end;
 
 function TMultiHeaderGrid.IsResizeArea(X, Y: Single; out AStartCol, AEndCol, ARow: Integer): TResizeMode;
 var
-  I,J        : Integer;
+  i,j        : Integer;
   Col         : integer;
   CellRect   : TRectF;
   ResizeRect : TRectF;
 begin
-  Result := TResizeMode.rmNone;
-  AStartCol := -1;
-  AEndCol := -1;
-  ARow := -1;
+  Result:=TResizeMode.rmNone;
+  AStartCol:=-1;
+  AEndCol:=-1;
+  ARow:=-1;
 
   if not FResizeEnabled then Exit;
 
@@ -2780,19 +3016,19 @@ begin
       for i:=0 to FHeaderLevels.Count-1 do begin
         Col:=0;
         for j:=0 to FHeaderLevels[i].Count-1 do begin
-          CellRect:=GetHeaderRect(I, Col);
+          CellRect:=GetHeaderRect(i, Col);
 
-          ResizeRect := TRectF.Create(
-            CellRect.Right - FResizeMargin,
+          ResizeRect:=TRectF.Create(
+            CellRect.Right-FResizeMargin-FGridLineWidth/4,
             CellRect.Top,
-            CellRect.Right + FResizeMargin,
+            CellRect.Right+FResizeMargin+FGridLineWidth/4,
             CellRect.Bottom
           );
 
           if ResizeRect.Contains(PointF(X, Y)) then begin
-            AStartCol := Col;
-            AEndCol := Col+FHeaderLevels[i][j].ColSpan-1;
-            Result := TResizeMode.rmColumn;
+            AStartCol:=Col;
+            AEndCol:=Col+FHeaderLevels[i][j].ColSpan-1;
+            Result:=TResizeMode.rmColumn;
             Exit;
           end;
 
@@ -2803,21 +3039,22 @@ begin
 
     if FResizeHeaderRowEnabled then begin
       // Проверяем изменение высоты строк заголовка
+
       for i:=0 to FHeaderLevels.Count-1 do begin
         Col:=0;
         for j:=0 to FHeaderLevels[i].Count-1 do begin
-          CellRect:=GetHeaderRect(I, Col);
+          CellRect:=GetHeaderRect(i, Col);
 
-          ResizeRect := TRectF.Create(
+          ResizeRect:=TRectF.Create(
             CellRect.Left,
-            CellRect.Bottom-FResizeMargin,
+            CellRect.Bottom-FResizeMargin-FGridLineWidth/4,
             CellRect.Right,
-            CellRect.Bottom+FResizeMargin
+            CellRect.Bottom+FResizeMargin+FGridLineWidth/4
           );
 
           if ResizeRect.Contains(PointF(X, Y)) then begin
-            ARow := I;
-            Result := TResizeMode.rmHeaderRow;
+            ARow:=i;
+            Result:=TResizeMode.rmHeaderRow;
             Exit;
           end;
 
@@ -2828,21 +3065,21 @@ begin
   end else begin
     if FResizeRowEnabled then begin
       // Проверяем изменение высоты строк грида
-      for I := 0 to FRowCount - 1 do begin
-        CellRect := GetCellRect(0, I); // Получаем прямоугольник строки
+
+      for i:=0 to FRowCount-1 do begin
+        CellRect:=GetCellRect(0, i); // Получаем прямоугольник строки
         if not CellRect.IsEmpty then begin
           // Проверяем нижнюю границу строки
-          ResizeRect := TRectF.Create(
-            CellRect.Left,
-            CellRect.Bottom - FResizeMargin,
-            Min(CellRect.Right,CellRect.Left+FResizeMargin),
-            CellRect.Bottom + FResizeMargin
+          ResizeRect:=TRectF.Create(
+            CellRect.Left-FGridLineWidth/4,
+            CellRect.Bottom-FResizeMargin-FGridLineWidth/4,
+            Min(CellRect.Right,CellRect.Left+FResizeMargin)+FGridLineWidth/2,
+            CellRect.Bottom+FResizeMargin+FGridLineWidth/4
           );
 
-          if ResizeRect.Contains(PointF(X, Y)) then
-          begin
-            ARow := I;
-            Result := TResizeMode.rmGridRow;
+          if ResizeRect.Contains(PointF(X, Y)) then begin
+            ARow:=i;
+            Result:=TResizeMode.rmGridRow;
             Exit;
           end;
         end;
@@ -2905,35 +3142,35 @@ end;
 
 procedure TMultiHeaderGrid.UpdateGroupColumnWidth(StartCol, EndCol: Integer; TotalWidth: Integer);
 var
-  I: Integer;
+  i: Integer;
   GroupColCount: Integer;
   NewWidth, RemainingWidth: Integer;
   ProportionalWidths: array of Integer;
 begin
-  if TotalWidth < 10 * (EndCol - StartCol + 1) then
-    TotalWidth := 10 * (EndCol - StartCol + 1); // Минимальная общая ширина
+  if TotalWidth<10*(EndCol-StartCol+1) then
+    TotalWidth:=10*(EndCol-StartCol+1); // Минимальная общая ширина
 
-  GroupColCount := EndCol - StartCol + 1;
+  GroupColCount:=EndCol-StartCol+1;
   SetLength(ProportionalWidths, GroupColCount);
 
   // Вычисляем пропорциональные ширины на основе исходных соотношений
-  RemainingWidth := TotalWidth;
+  RemainingWidth:=TotalWidth;
 
   // Первый проход: вычисляем пропорциональные ширины
   var FResizeStartWidth:=ResizeStartWidth;
-  for I := 0 to GroupColCount - 1 do begin
-    ProportionalWidths[I] := Round(FResizeStartWidths[I] * TotalWidth / FResizeStartWidth);
-    Dec(RemainingWidth, ProportionalWidths[I]);
+  for i:=0 to GroupColCount-1 do begin
+    ProportionalWidths[i]:=Round(FResizeStartWidths[i]*TotalWidth/FResizeStartWidth);
+    Dec(RemainingWidth, ProportionalWidths[i]);
   end;
 
   // Второй проход: распределяем остаток
-  if RemainingWidth <> 0 then begin
-    for I := 0 to GroupColCount - 1 do begin
-      if RemainingWidth > 0 then begin
-        Inc(ProportionalWidths[I]);
+  if RemainingWidth<>0 then begin
+    for i:=0 to GroupColCount-1 do begin
+      if RemainingWidth>0 then begin
+        Inc(ProportionalWidths[i]);
         Dec(RemainingWidth);
-      end else if RemainingWidth < 0 then begin
-        Dec(ProportionalWidths[I]);
+      end else if RemainingWidth<0 then begin
+        Dec(ProportionalWidths[i]);
         Inc(RemainingWidth);
       end else begin
         Break;
@@ -2942,19 +3179,19 @@ begin
   end;
 
   // Применяем новые ширины
-  for I := StartCol to EndCol do begin
-    NewWidth := ProportionalWidths[I - StartCol];
-    if NewWidth < 10 then
-      NewWidth := 10; // Минимальная ширина столбца
+  for i:=StartCol to EndCol do begin
+    NewWidth:=ProportionalWidths[i-StartCol];
+    if NewWidth<10 then
+      NewWidth:=10; // Минимальная ширина столбца
 
-    SetColWidth(I, NewWidth);
+    SetColWidth(i, NewWidth);
   end;
 
-  InvalidateRect(LocalRect);
+  Invalidate;
 
   // Обновляем горизонтальную прокрутку
   if Assigned(HScrollBar) then
-    HScrollBar.Value := FViewLeft;
+    HScrollBar.Value:=FViewLeft;
 end;
 
 procedure TMultiHeaderGrid.UpdateColumnWidth(StartCol, EndCol: Integer; NewWidth: Integer);
@@ -2964,52 +3201,50 @@ begin
     UpdateGroupColumnWidth(StartCol, EndCol, NewWidth);
   end else begin
     // Ресайз одной колонки
-    if NewWidth < 10 then begin
-      NewWidth := 10; // Минимальная ширина
+    if NewWidth<10 then begin
+      NewWidth:=10; // Минимальная ширина
     end;
 
     SetColWidth(EndCol, NewWidth);
 
-    InvalidateRect(LocalRect);
+    Invalidate;
 
     // Обновляем горизонтальную прокрутку
     if Assigned(HScrollBar) then begin
-      HScrollBar.Value := FViewLeft;
+      HScrollBar.Value:=FViewLeft;
     end;
   end;
 end;
 
 procedure TMultiHeaderGrid.UpdateHeaderRowHeight(ARow: Integer; NewHeight: Integer);
 begin
-  if NewHeight < 10 then
-    NewHeight := 10; // Минимальная высота
+  if NewHeight<10 then
+    NewHeight:=10; // Минимальная высота
 
   FHeaderLevels[ARow].Height:=NewHeight;
 
-  InvalidateRect(LocalRect);
+  Invalidate;
 
   // Обновляем вертикальную прокрутку
-  if Assigned(VScrollBar) then
-  begin
+  if Assigned(VScrollBar) then begin
     VScrollBar.BeginUpdate;
-    VScrollBar.Value := FViewTop;
+    VScrollBar.Value:=FViewTop;
     VScrollBar.EndUpdate;
   end;
 end;
 
 procedure TMultiHeaderGrid.UpdateRowHeight(ARow: Integer; NewHeight: Integer);
 begin
-  if NewHeight < 10 then
-    NewHeight := 10; // Минимальная высота
+  if NewHeight<10 then
+    NewHeight:=10; // Минимальная высота
 
   SetRowHeight(ARow, NewHeight);
-  InvalidateRect(LocalRect);
+  Invalidate;
 
   // Обновляем вертикальную прокрутку
-  if Assigned(VScrollBar) then
-  begin
+  if Assigned(VScrollBar) then begin
     VScrollBar.BeginUpdate;
-    VScrollBar.Value := FViewTop;
+    VScrollBar.Value:=FViewTop;
     VScrollBar.EndUpdate;
   end;
 end;
@@ -3050,7 +3285,7 @@ procedure TMultiHeaderGrid.SetRowSelect(const Value: Boolean);
 begin
   if FRowSelect<>Value then begin
     FRowSelect:=Value;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
@@ -3063,42 +3298,70 @@ end;
 
 function TMultiHeaderGrid.GetColTextHAlignment(Index: Integer): TTextAlign;
 begin
-  if (Index>=0) and (Index<Length(FColTextHAlignment)) then
-    Result:=FColTextHAlignment[Index]
+  if (Index>=0) and (Index<Length(FColData)) then
+    Result:=FColData[Index].TextHAlignment
   else
     Result:=TTextAlign.Leading;
 end;
 
 function TMultiHeaderGrid.GetColTextVAlignment(Index: Integer): TTextAlign;
 begin
-  if (Index>=0) and (Index<Length(FColTextVAlignment)) then
-    Result:=FColTextVAlignment[Index]
+  if (Index>=0) and (Index<Length(FColData)) then
+    Result:=FColData[Index].TextVAlignment
   else
     Result:=TTextAlign.Center;
 end;
 
 procedure TMultiHeaderGrid.SetColTextHAlignment(Index: Integer; const Value: TTextAlign);
 begin
-  if (Index>=0) and (Index<Length(FColTextHAlignment)) and (FColTextHAlignment[Index]<>Value) then begin
-    FColTextHAlignment[Index]:=Value;
+  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].TextHAlignment<>Value) then begin
+    FColData[Index].TextHAlignment:=Value;
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetColTextVAlignment(Index: Integer; const Value: TTextAlign);
 begin
-  if (Index>=0) and (Index<Length(FColTextVAlignment)) and (FColTextVAlignment[Index]<>Value) then begin
-    FColTextVAlignment[Index]:=Value;
+  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].TextVAlignment<>Value) then begin
+    FColData[Index].TextVAlignment:=Value;
     UpdateSize;
-    InvalidateRect(LocalRect);
+    Invalidate;
   end;
 end;
 
+function TMultiHeaderGrid.GetColWordWrap(Index: Integer): Boolean;
+begin
+  if (Index>=0) and (Index<FColCount) then
+    Result:=FColData[Index].WordWrap
+  else
+    Result:=False;
+end;
+
+procedure TMultiHeaderGrid.SetColWordWrap(Index: Integer; const Value: Boolean);
+begin
+  if (Index>=0) and (Index<FColCount) then begin
+    FColData[Index].WordWrap:=Value;
+    Invalidate;
+  end;
+end;
 
 procedure TMultiHeaderGrid.ClearSelection;
 begin
   SelectedCell:=Point(-1,-1);
+end;
+
+procedure TMultiHeaderGrid.SetWordWrap(const Value: Boolean);
+begin
+  if FWordWrap<>Value then begin
+    FWordWrap:=Value;
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.Invalidate;
+begin
+  InvalidateRect(LocalRect);
 end;
 
 end.
