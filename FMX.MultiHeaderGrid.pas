@@ -343,6 +343,7 @@ type
     function GetColMinWidth(Index: Integer): integer;
     procedure SetColMaxWidth(Index: Integer; const Value: integer);
     procedure SetColMinWidth(Index: Integer; const Value: integer);
+    function GridHaveWordWrap: boolean;
   protected
     function CanObserve(const ID: Integer): Boolean; override;
 
@@ -1048,6 +1049,17 @@ begin
     Result:=0;
 end;
 
+function TMultiHeaderGrid.GridHaveWordWrap: boolean;
+begin
+  if FWordWrap or FGridCellsHasWordWrap then Exit(True);
+
+  for var ColData in FColData do begin
+    if ColData.WordWrap then Exit(True)
+  end;
+
+  Result:=False;
+end;
+
 function TMultiHeaderGrid.ViewBottom: Integer;
 begin
   Result:=ViewTop+ViewCellsHeight;
@@ -1278,7 +1290,7 @@ var
 begin
   Canvas:=Self.Canvas;
 
-  if FWordWrap then begin
+  if GridHaveWordWrap then begin
     AutoSizeVisibleRows;
   end;
 
@@ -2046,7 +2058,7 @@ begin
   if ForcePrecise then begin
     ComputeMode:=TSizeComputeMode.cmSlow;
   end;
-  if FWordWrap or FGridCellsHasWordWrap then begin
+  if GridHaveWordWrap then begin
     ComputeMode:=TSizeComputeMode.cmFull;
   end;
 
