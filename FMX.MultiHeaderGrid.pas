@@ -726,6 +726,8 @@ begin
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
 
+  Margins.Rect:=RectF(4,4,4,4);
+
   VScrollBar:=TScrollBar.Create(Self);
   VScrollBar.Orientation:=TOrientation.Vertical;
   VScrollBar.Parent:=Self;
@@ -2068,7 +2070,8 @@ begin
   for var Row:=FromRow to FRowCount-1 do begin
     if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
        ((ToRow>=0) and (Row>ToRow)) then Break;
-    var MaxHeight:=0.0;
+
+    var MaxHeight:=TH;
     for var Col:=0 to FColCount-1 do begin
 
       var RowSpan:=1;
