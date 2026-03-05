@@ -2181,9 +2181,11 @@ begin
       end;
     end;
 
-    FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
-    if Row>0 then begin
-      FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
+    if Row>=0 then begin
+      FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+      if Row>0 then begin
+        FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
+      end;
     end;
   end;
 
@@ -2369,8 +2371,7 @@ begin
   end;
 end;
 
-procedure TMultiHeaderGrid.MouseWheel(Shift: TShiftState; WheelDelta: Integer;
-  var Handled: Boolean);
+procedure TMultiHeaderGrid.MouseWheel(Shift: TShiftState; WheelDelta: Integer; var Handled: Boolean);
 begin
   inherited;
   if Handled then Exit;
@@ -2385,7 +2386,7 @@ begin
   if ssHorizontal in Shift then begin
     ViewLeft:=ViewLeft+WheelDelta;
   end else begin
-    ViewTop:=Min(ViewTop+WheelDelta,FullTableHeight);
+    ViewTop:=Min(ViewTop+WheelDelta,FullTableHeight-ViewPortDataHeight-HeaderHeight);
   end;
   Invalidate;
 end;
