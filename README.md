@@ -9,4 +9,6 @@ TMultiHeaderGrid - does not store cell texts or styles. Use events to populate.
 
 TMultiHeaderStringGrid - stores cell texts and styles internally.
 
+TMultiHeaderDBGrid - show grid from TDataSource (from TDataSet).
+
 Usage examples in Test folder.
