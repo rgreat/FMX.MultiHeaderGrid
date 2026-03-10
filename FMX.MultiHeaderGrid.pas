@@ -4,7 +4,7 @@ interface
 
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
-  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts;
+  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts, Data.DB;
 
 type
 
@@ -140,7 +140,7 @@ type
     function GetColumnsToSkip: TArray<Boolean>;
   public
     FLevels : THeaderLevels;
-    constructor Create(HeaderLevels: THeaderLevels);
+    constructor Create(HeaderLevels: THeaderLevels; InsertBefore: integer = -1);
 
     function AddColumn(Caption: string = '';
                        ColSpan: Integer = 1;
@@ -160,6 +160,8 @@ type
 
     function AddRow: THeaderLevel; overload;
     function AddRow(Heigth: integer): THeaderLevel; overload;
+    function AddRowOnTop: THeaderLevel; overload;
+    function AddRowOnTop(Heigth: integer): THeaderLevel; overload;
     function GetElementAtCell(ACol, ARow: integer): THeaderElement;
   end;
 
@@ -528,18 +530,54 @@ type
     destructor Destroy; override;
   end;
 
+  TMultiHeaderDBGrid = class(TMultiHeaderGrid)
+  private
+    type
+      TRowData = class
+        LastUsage : TDateTime;
+        Cells     : TArray<string>;
+      end;
+      TRowsData = TObjectDictionary<integer,TMultiHeaderDBGrid.TRowData>;
+
+    var
+      FDataSource: TDataSource;
+      FCellTexts: TRowsData;
+      FRowCacheSize: integer;
+
+    procedure SetDataSource(const Value: TDataSource);
+    procedure SetRowCacheSize(const Value: integer);
+    procedure CleanUpCache;
+  protected
+    procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
+    procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
+    procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
+    procedure DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle); override;
+  public
+    constructor Create(AOwner: TComponent); override;
+    destructor Destroy; override;
+
+    procedure ResetTable;
+
+    function DataSet: TDataSet;
+    function Column(FieldNum: integer): THeaderElement; overload;
+    function Column(FieldName: string): THeaderElement; overload;
+  published
+    property DataSource: TDataSource read FDataSource write SetDataSource;
+    property RowCacheSize: integer read FRowCacheSize write SetRowCacheSize default 1000;
+  end;
 
 procedure Register;
 
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform;
+  System.SysUtils, System.Math, FMX.Platform, System.StrUtils;
 
 procedure Register;
 begin
   RegisterComponents('FMX', [TMultiHeaderGrid]);
   RegisterComponents('FMX', [TMultiHeaderStringGrid]);
+  RegisterComponents('FMX', [TMultiHeaderDBGrid]);
 end;
 
 { THeaderElement }
@@ -615,12 +653,17 @@ begin
   Result:=AddColumn(Caption,-1);
 end;
 
-constructor THeaderLevel.Create(HeaderLevels: THeaderLevels);
+constructor THeaderLevel.Create(HeaderLevels: THeaderLevels; InsertBefore: integer = -1);
 begin
   inherited Create;
 
   FLevels:=HeaderLevels;
-  HeaderLevels.Add(Self);
+
+  if InsertBefore>=0 then begin
+    HeaderLevels.Insert(InsertBefore,Self);
+  end else begin
+    HeaderLevels.Add(Self);
+  end;
 end;
 
 procedure THeaderLevel.SetHeight(const Value: Integer);
@@ -665,6 +708,17 @@ function THeaderLevels.AddRow(Heigth: integer): THeaderLevel;
 begin
   Result:=THeaderLevel.Create(Self);
   Result.FHeight:=Heigth;
+end;
+
+function THeaderLevels.AddRowOnTop(Heigth: integer): THeaderLevel;
+begin
+  Result:=THeaderLevel.Create(Self,0);
+  Result.FHeight:=Heigth;
+end;
+
+function THeaderLevels.AddRowOnTop: THeaderLevel;
+begin
+  Result:=AddRowOnTop(25);
 end;
 
 function THeaderLevels.AddRow: THeaderLevel;
@@ -811,7 +865,7 @@ begin
   FResizeMargin:=2;
 
   if csDesigning in ComponentState then begin
-    Header.AddRow.FillRow('Header');
+    Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
     Width:=401;
     Height:=225;
     VScrollBar.Visible:=False;
@@ -1393,7 +1447,11 @@ begin
   end else begin
     Canvas.Fill.Color:=FCellFontColor;
   end;
-  Canvas.FillText(ARect, Element.Caption, False, 1, [], HAlignment, VAlignment);
+
+  var TextRect:=ARect;
+  TextRect.Inflate(-CellPadding.Left-FGridLineWidth/2,-CellPadding.Top-FGridLineWidth/2,
+                   -CellPadding.Right-FGridLineWidth/2,-CellPadding.Bottom-FGridLineWidth/2);
+  Canvas.FillText(TextRect, Element.Caption, False, 1, [], HAlignment, VAlignment);
 
   // Границы
   Canvas.DrawRect(ARect, 0, 0, AllCorners, 1);
@@ -3431,6 +3489,151 @@ end;
 procedure TMultiHeaderGrid.Invalidate;
 begin
   InvalidateRect(LocalRect);
+end;
+
+{ TMultiHeaderDBGrid }
+
+function TMultiHeaderDBGrid.Column(FieldNum: integer): THeaderElement;
+begin
+  if DataSet=nil then Exit(nil);
+
+  Result:=FHeaderLevels.Last[FieldNum];
+end;
+
+procedure TMultiHeaderDBGrid.CleanUpCache;
+begin
+  if FRowCacheSize<FCellTexts.Count then Exit;
+
+  repeat
+    var MinTime: TDateTime := 0;
+    var MinRow:=-1;
+    for var Item in FCellTexts do begin
+      if MinTime>Item.Value.LastUsage then begin
+        MinTime:=Item.Value.LastUsage;
+        MinRow:=Item.Key;
+      end;
+    end;
+    if MinRow>=0 then begin
+      FCellTexts.Remove(MinRow);
+    end else begin
+      Break;
+    end;
+  until FRowCacheSize<FCellTexts.Count;
+end;
+
+function TMultiHeaderDBGrid.Column(FieldName: string): THeaderElement;
+begin
+  if DataSet=nil then Exit(nil);
+
+  Result:=Column(DataSet.Fields.FieldByName(FieldName).Index);
+end;
+
+constructor TMultiHeaderDBGrid.Create(AOwner: TComponent);
+begin
+  inherited;
+
+  FRowCacheSize:=1000;
+  FCellTexts:=TRowsData.Create([doOwnsValues],FRowCacheSize);
+end;
+
+destructor TMultiHeaderDBGrid.Destroy;
+begin
+  FCellTexts.Free;
+
+  inherited;
+end;
+
+procedure TMultiHeaderDBGrid.DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle);
+begin
+  inherited;
+  Exit;
+end;
+
+procedure TMultiHeaderDBGrid.DoGetCellText(ACol, ARow: Integer; var Text: string);
+begin
+  if (ARow<0) or (ACol<0) then Exit;
+
+  if DataSet=nil then Exit;
+
+  if (ARow>DataSet.RecordCount) or (ACol>DataSet.FieldCount-1) then Exit;
+
+  var RowData: TRowData;
+  if FCellTexts.TryGetValue(ARow,RowData) then begin
+    if (ACol>High(RowData.Cells)) then Exit;
+  end else begin
+    RowData:=TRowData.Create;
+    DataSet.RecNo:=ARow+1;
+    SetLength(RowData.Cells,DataSet.FieldCount);
+    for var i:=0 to DataSet.FieldCount-1 do begin
+      RowData.Cells[i]:=DataSet.Fields[i].AsString;
+    end;
+    FCellTexts.Add(ARow,RowData);
+    CleanUpCache;
+  end;
+
+  RowData.LastUsage:=Now;
+  Text:=RowData.Cells[ACol];
+
+  inherited;
+end;
+
+procedure TMultiHeaderDBGrid.DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle);
+begin
+  inherited;
+  Exit;
+end;
+
+procedure TMultiHeaderDBGrid.DoSetCellText(ACol, ARow: Integer; const Text: string);
+begin
+  inherited;
+  Exit;
+end;
+
+function TMultiHeaderDBGrid.DataSet: TDataSet;
+begin
+  if Assigned(DataSource) and Assigned(DataSource.DataSet) then begin
+    Exit(DataSource.DataSet);
+  end else begin
+    Exit(nil);
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.ResetTable;
+begin
+  var DS:=DataSet;
+  if not Assigned(DS) then begin
+    ColCount:=5;
+    RowCount:=1;
+    Header.Clear;
+    Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+    Exit;
+  end;
+
+  RowCount:=DS.RecordCount;
+  ColCount:=DS.FieldCount;
+
+  Header.Clear;
+  var Row:=Header.AddRow;
+  for var Col in DS.Fields do begin
+    Row.AddColumn(Col.FieldName);
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.SetDataSource(const Value: TDataSource);
+begin
+  if FDataSource<>Value then begin
+    FDataSource:=Value;
+    ResetTable;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.SetRowCacheSize(const Value: integer);
+begin
+  if FRowCacheSize<>Value then begin
+    FRowCacheSize:=Value;
+
+    CleanUpCache;
+  end;
 end;
 
 end.

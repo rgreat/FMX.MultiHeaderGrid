@@ -116,10 +116,12 @@ object Form1: TForm1
     Size.Width = 830.000000000000000000
     Size.Height = 426.000000000000000000
     Size.PlatformDefault = False
-    TabIndex = 0
+    TabIndex = 2
     TabOrder = 3
     TabPosition = PlatformDefault
     Sizes = (
+      830s
+      400s
       830s
       400s
       830s
@@ -128,7 +130,7 @@ object Form1: TForm1
       CustomIcon = <
         item
         end>
-      IsSelected = True
+      IsSelected = False
       Size.Width = 115.000000000000000000
       Size.Height = 26.000000000000000000
       Size.PlatformDefault = False
@@ -194,6 +196,47 @@ object Form1: TForm1
         OnDrawCell = GridDrawCell
       end
     end
+    object TabItem3: TTabItem
+      CustomIcon = <
+        item
+        end>
+      IsSelected = True
+      Size.Width = 130.000000000000000000
+      Size.Height = 26.000000000000000000
+      Size.PlatformDefault = False
+      StyleLookup = ''
+      TabOrder = 0
+      Text = 'TMultiHeaderDBGrid'
+      ExplicitSize.cx = 130.000000000000000000
+      ExplicitSize.cy = 26.000000000000000000
+      object Grid3: TMultiHeaderDBGrid
+        Align = Client
+        Margins.Left = 4.000000000000000000
+        Margins.Top = 4.000000000000000000
+        Margins.Right = 4.000000000000000000
+        Margins.Bottom = 4.000000000000000000
+        Size.Width = 822.000000000000000000
+        Size.Height = 392.000000000000000000
+        Size.PlatformDefault = False
+        RowCount = 0
+        Col = -1
+        Row = -1
+        DefaultColWidth = 80
+        DefaultRowHeight = 20
+        GridLineWidth = 1.000000000000000000
+        CellColorAlternate = xFFEDFAFF
+        OnDrawCell = Grid3DrawCell
+        RowCacheSize = 0
+        object Label2: TLabel
+          StyledSettings = [Family, Size, Style]
+          Position.X = 64.000000000000000000
+          Position.Y = 104.000000000000000000
+          TextSettings.FontColor = xFFE5FFCA
+          Text = 'Label2'
+          TabOrder = 2
+        end
+      end
+    end
   end
   object StatusBar1: TStatusBar
     Position.Y = 462.000000000000000000
@@ -211,5 +254,68 @@ object Form1: TForm1
       Text = 'RowCount'
       TabOrder = 3
     end
+  end
+  object CDS: TClientDataSet
+    Aggregates = <>
+    Params = <>
+    Left = 76
+    Top = 362
+  end
+  object DS: TDataSource
+    DataSet = CDS
+    Left = 103
+    Top = 362
+  end
+  object IL1: TImageList
+    Source = <
+      item
+        MultiResBitmap = <
+          item
+            Width = 16
+            Height = 16
+            PNG = {
+              89504E470D0A1A0A0000000D49484452000000100000001008060000001FF3FF
+              610000000473424954080808087C0864880000005749444154388D6360184CC0
+              9B8181E1090303C37F02F8310303832736031E333030581161910D0303C3236C
+              12FF49702D5C2D13099AB0825103069B014FA0898410B085263A0CE009952094
+              941F3130307850EA72EA0100D0D31B2BEC8110FF0000000049454E44AE426082}
+            FileName = 'd:\unchecked.png'
+          end>
+        Name = 'unchecked'
+      end
+      item
+        MultiResBitmap = <
+          item
+            Width = 16
+            Height = 16
+            PNG = {
+              89504E470D0A1A0A0000000D49484452000000100000001008060000001FF3FF
+              610000000473424954080808087C086488000000D349444154388DA5D3A14E03
+              411006E08F163CEF81C5F44C350E04583421ADE2594A822315249720AA30208F
+              27A841F02010AE8719B139AEB7D7F2279B99CD4CFEF96776967FE220EC18B798
+              84DF871AEF58840FE668763C33180541B187FA222518F5E7822FAC93FB180E07
+              56FBC6053EF191068610D4B84685B7763047D0E0062BBCE0B49DD0D5FB255EC3
+              BFC3239E31EDAAD0A5E018E741B4C413CE324A95C9FBFEE02A96ECA1670FCA6D
+              044D4C7D9D59A4329DC1A6A5E8082719D5754A50E57AEC402519E2226C31F033
+              55B8DFA3E85FFC02557E40A49CFF371F0000000049454E44AE426082}
+            FileName = 'd:\checked.png'
+          end>
+        Name = 'checked'
+      end>
+    Destination = <
+      item
+        Layers = <
+          item
+            Name = 'unchecked'
+          end>
+      end
+      item
+        Layers = <
+          item
+            Name = 'checked'
+          end>
+      end>
+    Left = 130
+    Top = 362
   end
 end

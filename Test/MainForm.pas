@@ -6,7 +6,7 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.MultiHeaderGrid,
   FMX.Controls.Presentation,
-  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl;
+  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient, System.ImageList, FMX.ImgList;
 
 type
   TForm1 = class(TForm)
@@ -27,6 +27,12 @@ type
     RowSelectCheckBox: TCheckBox;
     ButtonFillCells: TButton;
     WordWrapCheckBox: TCheckBox;
+    TabItem3: TTabItem;
+    Grid3: TMultiHeaderDBGrid;
+    CDS: TClientDataSet;
+    DS: TDataSource;
+    Label2: TLabel;
+    IL1: TImageList;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
@@ -46,6 +52,8 @@ type
     procedure ButtonFillCellsClick(Sender: TObject);
     procedure GridDblClick(Sender: TObject);
     procedure WordWrapCheckBoxChange(Sender: TObject);
+    procedure Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
+      IsSelected: Boolean; const Text: string; var Handled: Boolean);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -79,6 +87,7 @@ begin
 
   InitGrid(Grid1);
   InitGrid(Grid2);
+  InitGrid(Grid3);
 end;
 
 // ---------------------------------------------------------
@@ -87,11 +96,63 @@ end;
 
 procedure TForm1.InitGrid(Grid: TMultiHeaderGrid);
 begin
-  InitGridParams(Grid);
-  InitGridHeader(Grid);
-  FillGrid(Grid);
-  MergeCellsinGrid(Grid);
-  Grid.AutoSize;
+  if Grid is TMultiHeaderDBGrid then begin
+    CDS.LoadFromFile('..\..\example.xml');
+
+    var G:=TMultiHeaderDBGrid(Grid);
+    G.DataSource:=DS;
+
+    G.Header.First.Height:=70;
+    G.Column('id').Caption:='Внутренний'#13#10'идентификатор';
+    G.Column('klns').Caption:='Номер'#13#10'класса'#13#10'обслуживания';
+    G.Column('kldotpn').Caption:='Начальная'#13#10'дата'#13#10'отправления';
+    G.Column('kldotpk').Caption:='Конечная'#13#10'дата'#13#10'отправления';
+    G.Column('klkod').Caption:='Символьный'#13#10'код'#13#10'класса';
+    G.Column('klnazv').Caption:='Название'#13#10'класса'#13#10'обслуживания';
+    G.Column('klname').Caption:='Развернутое имя';
+    G.Column('kltip').Caption:='Тип вагона';
+    G.Column('klabd').Caption:='Код класса'#13#10'в УЗ';
+    G.Column('klsob').Caption:='Сетевой'#13#10'код'#13#10'перевозчика'#13#10'или 0';
+    G.Column('klntstp').Caption:='Условный уровень'#13#10'комфортности для'#13#10'сравнения классов';
+    G.Column('klfl05').Caption:='Признак'#13#10'вагон'#13#10'повышенной'#13#10'комфортности';
+    G.Column('klpr05').Caption:='Признак'#13#10'белье'#13#10'по желанию';
+    G.Column('klpr06').Caption:='Признак'#13#10'бизнес-класс';
+    G.Column('klf2f1').Caption:='Признак'#13#10'«обязательно'#13#10'4 места'#13#10'в одном заказе»';
+    G.Column('klf2f2').Caption:='Признак'#13#10'«сервис на'#13#10'одного'#13#10'пассажира»';
+    G.Column('klfl04').Caption:='Признак'#13#10'«обязательно 2 места'#13#10'в одном заказе»';
+    G.Column('cor_tip').Caption:='Тип'#13#10'корректировки';
+    G.Column('cor_time').Caption:='Время'#13#10'обновления';
+
+    var Row:=G.Header.AddRowOnTop;
+    var Cell:=Row.FillRow('Справочник классов обслуживания вагонов пассажирских поездов Экспресс');
+    Cell.Style.CellColor:=TAlphaColors.Lightblue;
+
+    Grid.AutoSize;
+
+    for var i:=0 to G.DataSource.DataSet.FieldCount-1 do begin
+      if (G.DataSource.DataSet.Fields[i].DataType=ftWideString) and
+         (G.ColWidths[i]>150) then begin
+        G.ColTextHAlignment[i]:=TTextAlign.Leading;
+      end else begin
+        G.ColTextHAlignment[i]:=TTextAlign.Center;
+      end;
+
+      case G.DataSource.DataSet.Fields[i].DataType of
+        ftWideString: G.Column(i).Style.CellColor:=TAlphaColorRec.Cornsilk;
+        ftInteger: G.Column(i).Style.CellColor:=$FFB3FFFF;
+        ftBoolean: G.Column(i).Style.CellColor:=$FFFFF6C7;
+        ftTimeStamp: G.Column(i).Style.CellColor:=$FFE5FFCA;
+      end;
+    end;
+
+  end else begin
+    InitGridParams(Grid);
+    InitGridHeader(Grid);
+    FillGrid(Grid);
+    MergeCellsinGrid(Grid);
+    Grid.AutoSize;
+  end;
+
 end;
 
 procedure TForm1.InitGridParams(Grid: TMultiHeaderGrid);
@@ -253,8 +314,12 @@ function TForm1.ActiveGrid: TMultiHeaderGrid;
 begin
   if TabControl1.ActiveTab=TabItem1 then begin
     Result:=Grid1;
-  end else begin
+  end;
+  if TabControl1.ActiveTab=TabItem2 then begin
     Result:=Grid2;
+  end;
+  if TabControl1.ActiveTab=TabItem3 then begin
+    Result:=Grid3;
   end;
 end;
 
@@ -400,6 +465,27 @@ begin
   Grid1CellTexts[ARow,ACol]:=Text;
 end;
 
+
+procedure TForm1.Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
+  IsSelected: Boolean; const Text: string; var Handled: Boolean);
+begin
+  var Grid:=TMultiHeaderDBGrid(Sender);
+
+  if Grid.DataSet=nil then Exit;
+  if Grid.DataSet.Fields[ACol].DataType<>ftBoolean then Exit;
+
+  if IsSelected then begin
+    Canvas.Fill.Color:=TAlphaColorRec.Lightblue;
+    Canvas.FillRect(Rect,1);
+  end else begin
+    Canvas.Fill.Color:=TAlphaColorRec.White;
+    Canvas.FillRect(Rect,1);
+  end;
+
+  IL1.Draw(Canvas,Rect,IfThen(Text='True',1,0));
+
+  Handled:=True;
+end;
 
 procedure TForm1.GridSelectCell(Sender: TObject);
 begin

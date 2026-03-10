@@ -30,7 +30,8 @@ package MultiHeaderGrid;
 
 requires
   rtl,
-  fmx;
+  fmx,
+  dbrtl;
 
 contains
   FMX.MultiHeaderGrid in 'FMX.MultiHeaderGrid.pas';
