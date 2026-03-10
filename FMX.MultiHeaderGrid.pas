@@ -619,7 +619,7 @@ begin
   Result.ColSpan:=ColSpan;
   Result.RowSpan:=RowSpan;
 
-  // Расчет текуещей колонки
+  // Р Р°СЃС‡РµС‚ С‚РµРєСѓРµС‰РµР№ РєРѕР»РѕРЅРєРё
   var CurCol:=0;
   for var Element in Self do begin
     inc(CurCol,Element.FColSpan);
@@ -631,7 +631,7 @@ begin
     inc(CurRow);
   end;
 
-  // Расчет пропуска столбцов
+  // Р Р°СЃС‡РµС‚ РїСЂРѕРїСѓСЃРєР° СЃС‚РѕР»Р±С†РѕРІ
   Result.FColSkip:=0;
   for var Row:=0 to FLevels.Count-1 do begin
     var Level:=FLevels[Row];
@@ -676,7 +676,7 @@ var
   i, j, k, Col: Integer;
   Element: THeaderElement;
 begin
-  // Создаем массив для отслеживания занятых колонок
+  // РЎРѕР·РґР°РµРј РјР°СЃСЃРёРІ РґР»СЏ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ Р·Р°РЅСЏС‚С‹С… РєРѕР»РѕРЅРѕРє
   SetLength(Result, FLevels.Grid.ColCount);
   for i:=0 to High(Result) do begin
     Result[i]:=False;
@@ -684,13 +684,13 @@ begin
 
   var LevelIndex:=FLevels.IndexOf(Self);
 
-  // Проходим по всем уровням выше текущего
+  // РџСЂРѕС…РѕРґРёРј РїРѕ РІСЃРµРј СѓСЂРѕРІРЅСЏРј РІС‹С€Рµ С‚РµРєСѓС‰РµРіРѕ
   for i:=0 to LevelIndex-1 do begin
     for j:=0 to FLevels[i].Count-1 do begin
       Element:=FLevels[i][j];
-      // Если элемент занимает несколько строк и его RowSpan распространяется на текущий уровень
+      // Р•СЃР»Рё СЌР»РµРјРµРЅС‚ Р·Р°РЅРёРјР°РµС‚ РЅРµСЃРєРѕР»СЊРєРѕ СЃС‚СЂРѕРє Рё РµРіРѕ RowSpan СЂР°СЃРїСЂРѕСЃС‚СЂР°РЅСЏРµС‚СЃСЏ РЅР° С‚РµРєСѓС‰РёР№ СѓСЂРѕРІРµРЅСЊ
       if (Element.RowSpan>1) and (i+Element.RowSpan>LevelIndex) then begin
-        // Помечаем все колонки, которые занимает этот элемент
+        // РџРѕРјРµС‡Р°РµРј РІСЃРµ РєРѕР»РѕРЅРєРё, РєРѕС‚РѕСЂС‹Рµ Р·Р°РЅРёРјР°РµС‚ СЌС‚РѕС‚ СЌР»РµРјРµРЅС‚
         for k:=0 to Element.ColSpan-1 do begin
           Col:=Element.ColSkip+k;
           if Col<Length(Result) then begin
@@ -830,7 +830,7 @@ begin
 
   CellPadding:=TBounds.Create(TRectF.Create(2,1,2,1));
 
-  // Инициализация ширины колонок и высоты строк
+  // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ С€РёСЂРёРЅС‹ РєРѕР»РѕРЅРѕРє Рё РІС‹СЃРѕС‚С‹ СЃС‚СЂРѕРє
   SetLength(FColData,FColCount);
   for i:=0 to FColCount-1 do begin
     FColData[i].Widths:=FDefaultColWidth;
@@ -1152,7 +1152,7 @@ var
   X, Y : Single;
   i    : Integer;
 begin
-  // Проверяем валидность диапазона
+  // РџСЂРѕРІРµСЂСЏРµРј РІР°Р»РёРґРЅРѕСЃС‚СЊ РґРёР°РїР°Р·РѕРЅР°
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
@@ -1160,7 +1160,7 @@ begin
   Y:=HeaderHeight-ViewTop;
 
   if IsMergedCell(ACol,ARow,MergedCell) then begin
-    // Корректируем прямоугольник для объединенной ячейки
+    // РљРѕСЂСЂРµРєС‚РёСЂСѓРµРј РїСЂСЏРјРѕСѓРіРѕР»СЊРЅРёРє РґР»СЏ РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРё
 
     Result.Left:=X+GetColLeft(MergedCell.Col);
     Result.Top:=Y+FRowData[MergedCell.Row].Top;
@@ -1171,7 +1171,7 @@ begin
     for i:=0 to MergedCell.RowSpan-1 do
       Result.Bottom:=Result.Bottom+GetRowHeight(MergedCell.Row+i);
   end else begin
-    // Прямой рассчет
+    // РџСЂСЏРјРѕР№ СЂР°СЃСЃС‡РµС‚
 
     Result.Left:=X+GetColLeft(ACol);
     Result.Top:=Y+FRowData[ARow].Top;
@@ -1185,18 +1185,18 @@ var
   X, Y: Single;
   i: Integer;
 begin
-  // Проверяем валидность диапазона
+  // РџСЂРѕРІРµСЂСЏРµРј РІР°Р»РёРґРЅРѕСЃС‚СЊ РґРёР°РїР°Р·РѕРЅР°
   if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
   X:=FGridLineWidth/4-ViewLeft;
   Y:=-FGridLineWidth/4+HeaderHeight-ViewTop;
 
-  // Вычисляем позицию колонки
+  // Р’С‹С‡РёСЃР»СЏРµРј РїРѕР·РёС†РёСЋ РєРѕР»РѕРЅРєРё
   for i:=0 to ACol-1 do
     X:=X+GetColWidth(i);
 
-  // Вычисляем позицию строки
+  // Р’С‹С‡РёСЃР»СЏРµРј РїРѕР·РёС†РёСЋ СЃС‚СЂРѕРєРё
   Y:=Y+FRowData[ARow].Top;
 
   Result:=RectF(X, Y, X+GetColWidth(ACol), Y+GetRowHeight(ARow));
@@ -1213,7 +1213,7 @@ function TMultiHeaderGrid.HeaderHeight: Integer;
 begin
   Result:=round(FGridLineWidth/2);
 
-  // Добавляем высоту заголовков
+  // Р”РѕР±Р°РІР»СЏРµРј РІС‹СЃРѕС‚Сѓ Р·Р°РіРѕР»РѕРІРєРѕРІ
   for var i:=0 to FHeaderLevels.Count-1 do
     Result:=Result+FHeaderLevels[i].Height;
 end;
@@ -1229,12 +1229,12 @@ begin
   X:=FGridLineWidth/4-ViewLeft;
   Y:=FGridLineWidth/4;
 
-  // Вычисляем позицию уровня заголовка
+  // Р’С‹С‡РёСЃР»СЏРµРј РїРѕР·РёС†РёСЋ СѓСЂРѕРІРЅСЏ Р·Р°РіРѕР»РѕРІРєР°
   for i:=0 to ALevel-1 do begin
     Y:=Y+FHeaderLevels[i].Height;
   end;
 
-  // Вычисляем позицию колонки
+  // Р’С‹С‡РёСЃР»СЏРµРј РїРѕР·РёС†РёСЋ РєРѕР»РѕРЅРєРё
   for i:=0 to ACol-1 do
     X:=X+GetColWidth(i);
 
@@ -1243,7 +1243,7 @@ begin
   if not Assigned(Element) then Exit(RectF(-1,-1,-1,-1));
   if FHeaderLevels.IndexOf(Element.FLevel)<>ALevel then Exit;
 
-  // Определяем фактический ColSpan (не больше оставшихся колонок)
+  // РћРїСЂРµРґРµР»СЏРµРј С„Р°РєС‚РёС‡РµСЃРєРёР№ ColSpan (РЅРµ Р±РѕР»СЊС€Рµ РѕСЃС‚Р°РІС€РёС…СЃСЏ РєРѕР»РѕРЅРѕРє)
   ActualColSpan:=Element.ColSpan;
   if ActualColSpan<0 then begin
     ActualColSpan:=FColCount-ACol;
@@ -1252,17 +1252,17 @@ begin
     ActualColSpan:=FColCount-ACol;
   end;
 
-  // Вычисляем ширину ячейки заголовка
+  // Р’С‹С‡РёСЃР»СЏРµРј С€РёСЂРёРЅСѓ СЏС‡РµР№РєРё Р·Р°РіРѕР»РѕРІРєР°
   Result:=RectF(X, Y, X, Y+ FHeaderLevels[ALevel].Height);
   for i:=0 to ActualColSpan-1 do
     Result.Right:=Result.Right+GetColWidth(ACol+i);
 
-  // Определяем фактический RowSpan (не больше оставшихся строк)
+  // РћРїСЂРµРґРµР»СЏРµРј С„Р°РєС‚РёС‡РµСЃРєРёР№ RowSpan (РЅРµ Р±РѕР»СЊС€Рµ РѕСЃС‚Р°РІС€РёС…СЃСЏ СЃС‚СЂРѕРє)
   ActualRowSpan:=Element.RowSpan;
   if ALevel+ActualRowSpan>FHeaderLevels.Count then
     ActualRowSpan:=FHeaderLevels.Count-ALevel;
 
-  // Вычисляем высоту ячейки заголовка
+  // Р’С‹С‡РёСЃР»СЏРµРј РІС‹СЃРѕС‚Сѓ СЏС‡РµР№РєРё Р·Р°РіРѕР»РѕРІРєР°
   for i:=1 to ActualRowSpan-1 do begin
     Result.Bottom:=Result.Bottom+FHeaderLevels[ALevel+i].Height;
   end;
@@ -1353,7 +1353,7 @@ begin
   if Canvas.BeginScene then begin
     var Save:=Canvas.SaveState;
     try
-      // Устанавливаем область обрезки
+      // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РѕР±Р»Р°СЃС‚СЊ РѕР±СЂРµР·РєРё
       var R:=TRectF.Create(LocalRect.Left,LocalRect.Top,
                            LocalRect.Left+LocalRect.Width,LocalRect.Top+LocalRect.Height);
       if VScrollBar.Visible then R.Right:=R.Right-VScrollBar.Width;
@@ -1363,17 +1363,17 @@ begin
       Canvas.Fill.Kind:=TBrushKind.Solid;
       Canvas.Fill.Color:=FBackgroundColor;
 
-      // Очищаем фон
+      // РћС‡РёС‰Р°РµРј С„РѕРЅ
       Canvas.FillRect(LocalRect, 0, 0, AllCorners, 1, Canvas.Fill);
 
-      // Рисуем ячейки
+      // Р РёСЃСѓРµРј СЏС‡РµР№РєРё
       DrawCells(Canvas);
 
-      // Рисуем линии сетки
+      // Р РёСЃСѓРµРј Р»РёРЅРёРё СЃРµС‚РєРё
       if FGridLines then
         DrawGridLines(Canvas);
 
-      // Рисуем заголовки
+      // Р РёСЃСѓРµРј Р·Р°РіРѕР»РѕРІРєРё
       DrawHeaders(Canvas);
     finally
       Canvas.RestoreState(Save);
@@ -1411,16 +1411,16 @@ begin
 
   var ARect:=GetHeaderRect(ALevel, ACol);
 
-  // Заливка фона
+  // Р—Р°Р»РёРІРєР° С„РѕРЅР°
   if Element.Style.CellColorIsSet then begin
-    // Задано явно для ячейки
+    // Р—Р°РґР°РЅРѕ СЏРІРЅРѕ РґР»СЏ СЏС‡РµР№РєРё
     Canvas.Fill.Color:=Element.Style.CellColor;
   end else begin
     Canvas.Fill.Color:=FHeaderCellColor;
   end;
   Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
 
-  // Тескт
+  // РўРµСЃРєС‚
   Canvas.Font.Assign(FCellFont);
 
   if Element.Style.FontNameIsSet then begin
@@ -1453,7 +1453,7 @@ begin
                    -CellPadding.Right-FGridLineWidth/2,-CellPadding.Bottom-FGridLineWidth/2);
   Canvas.FillText(TextRect, Element.Caption, False, 1, [], HAlignment, VAlignment);
 
-  // Границы
+  // Р“СЂР°РЅРёС†С‹
   Canvas.DrawRect(ARect, 0, 0, AllCorners, 1);
 end;
 
@@ -1472,13 +1472,13 @@ begin
     if FRowData[j].Top>ViewBottomCell then Break;
     for i:=0 to FColCount-1 do begin
 
-      // Пропускаем объединенные ячейки (кроме первой)
+      // РџСЂРѕРїСѓСЃРєР°РµРј РѕР±СЉРµРґРёРЅРµРЅРЅС‹Рµ СЏС‡РµР№РєРё (РєСЂРѕРјРµ РїРµСЂРІРѕР№)
       if IsMergedCell(i, j, MergedCell) then begin
         var FirstVisibleRow:=Max(MergedCell.Row,TopRow);
 
         if (i=MergedCell.Col) and (j=FirstVisibleRow) then begin
           Rect:=GetCellRect(MergedCell.Col, MergedCell.Row);
-          // Корректируем прямоугольник для объединенной ячейки
+          // РљРѕСЂСЂРµРєС‚РёСЂСѓРµРј РїСЂСЏРјРѕСѓРіРѕР»СЊРЅРёРє РґР»СЏ РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРё
           Rect.Right:=Rect.Left;
           Rect.Bottom:=Rect.Top;
           for var K:=0 to MergedCell.ColSpan-1 do
@@ -1503,24 +1503,24 @@ var
   Text            : string;
   MergedCell      : TMergedCell;
   IsSelected      : Boolean;
-  WordWrapEnabled : Boolean; // Добавлено: флаг переноса слов
+  WordWrapEnabled : Boolean; // Р”РѕР±Р°РІР»РµРЅРѕ: С„Р»Р°Рі РїРµСЂРµРЅРѕСЃР° СЃР»РѕРІ
 begin
   Handled:=False;
 
-  // Проверяем, является ли ячейка частью объединенной
+  // РџСЂРѕРІРµСЂСЏРµРј, СЏРІР»СЏРµС‚СЃСЏ Р»Рё СЏС‡РµР№РєР° С‡Р°СЃС‚СЊСЋ РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№
   if IsMergedCell(ACol, ARow, MergedCell) then begin
-    // Рисуем только первую ячейку объединенного блока
+    // Р РёСЃСѓРµРј С‚РѕР»СЊРєРѕ РїРµСЂРІСѓСЋ СЏС‡РµР№РєСѓ РѕР±СЉРµРґРёРЅРµРЅРЅРѕРіРѕ Р±Р»РѕРєР°
     if (ACol<>MergedCell.Col) or (ARow<>MergedCell.Row) then Exit;
 
-    // Проверяем, выделена ли основная ячейка этого блока
+    // РџСЂРѕРІРµСЂСЏРµРј, РІС‹РґРµР»РµРЅР° Р»Рё РѕСЃРЅРѕРІРЅР°СЏ СЏС‡РµР№РєР° СЌС‚РѕРіРѕ Р±Р»РѕРєР°
     IsSelected:=((MergedCell.Col<=FSelectedCell.X) and (MergedCell.Col+MergedCell.ColSpan>FSelectedCell.X) or FRowSelect) and
                  (MergedCell.Row<=FSelectedCell.Y) and (MergedCell.Row+MergedCell.RowSpan>FSelectedCell.Y);
 
-    // Выделенная ячейка
+    // Р’С‹РґРµР»РµРЅРЅР°СЏ СЏС‡РµР№РєР°
     if IsSelected then
       Canvas.Fill.Color:=TAlphaColors.Lightblue;
 
-    // Корректируем прямоугольник для объединенной ячейки
+    // РљРѕСЂСЂРµРєС‚РёСЂСѓРµРј РїСЂСЏРјРѕСѓРіРѕР»СЊРЅРёРє РґР»СЏ РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРё
     ARect.Right:=ARect.Left;
     ARect.Bottom:=ARect.Top;
     for var i:=0 to MergedCell.ColSpan-1 do
@@ -1528,15 +1528,15 @@ begin
     for var i:=0 to MergedCell.RowSpan-1 do
       ARect.Bottom:=ARect.Bottom+GetRowHeight(ARow+i);
 
-    // Текст
+    // РўРµРєСЃС‚
     Text:=Cells[MergedCell.Col,MergedCell.Row];
   end else begin
-    // Обычная ячейка
+    // РћР±С‹С‡РЅР°СЏ СЏС‡РµР№РєР°
     IsSelected:=((ACol=FSelectedCell.X) or FRowSelect) and (ARow=FSelectedCell.Y);
 
     Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
 
-    // Текст
+    // РўРµРєСЃС‚
     Text:=Cells[ACol, ARow];
   end;
 
@@ -1545,8 +1545,8 @@ begin
   if not Handled then begin
     var CellStyle:=CellStyle[ACol, ARow];
 
-    // Определяем, нужно ли использовать перенос слов
-    // Добавлено: логика определения WordWrap
+    // РћРїСЂРµРґРµР»СЏРµРј, РЅСѓР¶РЅРѕ Р»Рё РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РїРµСЂРµРЅРѕСЃ СЃР»РѕРІ
+    // Р”РѕР±Р°РІР»РµРЅРѕ: Р»РѕРіРёРєР° РѕРїСЂРµРґРµР»РµРЅРёСЏ WordWrap
     if CellStyle.WordWrapIsSet then begin
       WordWrapEnabled:=CellStyle.WordWrap;
     end else if (ACol>=0) and (ACol<FColCount) then begin
@@ -1555,21 +1555,21 @@ begin
       WordWrapEnabled:=FWordWrap;
     end;
 
-    // Заливка
+    // Р—Р°Р»РёРІРєР°
     if IsSelected then begin
-      // Выделенная ячейка
+      // Р’С‹РґРµР»РµРЅРЅР°СЏ СЏС‡РµР№РєР°
       if CellStyle.SelectedCellColorIsSet then begin
         Canvas.Fill.Color:=CellStyle.SelectedCellColor;
       end else begin
         Canvas.Fill.Color:=FSelectedCellColor;
       end;
     end else begin
-      // Обычная ячейка
+      // РћР±С‹С‡РЅР°СЏ СЏС‡РµР№РєР°
       if CellStyle.CellColorIsSet then begin
-        // Задано явно для ячейки
+        // Р—Р°РґР°РЅРѕ СЏРІРЅРѕ РґР»СЏ СЏС‡РµР№РєРё
         Canvas.Fill.Color:=CellStyle.CellColor;
       end else begin
-        // Чередование цветов строк
+        // Р§РµСЂРµРґРѕРІР°РЅРёРµ С†РІРµС‚РѕРІ СЃС‚СЂРѕРє
         if (ARow mod 2=1) and (FCellColorAlternate<>TAlphaColors.Null) then begin
           Canvas.Fill.Color:=FCellColorAlternate;
         end else begin
@@ -1579,7 +1579,7 @@ begin
     end;
     Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
 
-    // Текст
+    // РўРµРєСЃС‚
     Canvas.Font.Assign(FCellFont);
 
     if CellStyle.FontNameIsSet then begin
@@ -1598,18 +1598,18 @@ begin
     end;
     var VAlignment:=ColTextVAlignment[ACol];
     if CellStyle.TextVAlignmentIsSet then begin
-      VAlignment:=CellStyle.TextVAlignment; // Исправлено: было HAlignment
+      VAlignment:=CellStyle.TextVAlignment; // РСЃРїСЂР°РІР»РµРЅРѕ: Р±С‹Р»Рѕ HAlignment
     end;
 
     if IsSelected then begin
-      // Выделенная ячейка
+      // Р’С‹РґРµР»РµРЅРЅР°СЏ СЏС‡РµР№РєР°
       if CellStyle.SelectedFontColorIsSet then begin
         Canvas.Fill.Color:=CellStyle.SelectedFontColor;
       end else begin
         Canvas.Fill.Color:=FCellFontColor;
       end;
     end else begin
-      // Обычная ячейка
+      // РћР±С‹С‡РЅР°СЏ СЏС‡РµР№РєР°
       if CellStyle.FontColorIsSet then begin
         Canvas.Fill.Color:=CellStyle.FontColor;
       end else begin
@@ -1617,7 +1617,7 @@ begin
       end;
     end;
 
-    // Корректировка области вывода для текста
+    // РљРѕСЂСЂРµРєС‚РёСЂРѕРІРєР° РѕР±Р»Р°СЃС‚Рё РІС‹РІРѕРґР° РґР»СЏ С‚РµРєСЃС‚Р°
     ARect.Left:=ARect.Left+CellPadding.Left+FGridLineWidth/4;
     ARect.Top:=ARect.Top+CellPadding.Top+FGridLineWidth/4-1;
     ARect.Right:=ARect.Right-CellPadding.Right-FGridLineWidth/4;
@@ -1634,7 +1634,7 @@ begin
 
     ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/4;
 
-    // Изменено: добавлен параметр WordWrapEnabled
+    // РР·РјРµРЅРµРЅРѕ: РґРѕР±Р°РІР»РµРЅ РїР°СЂР°РјРµС‚СЂ WordWrapEnabled
     Canvas.FillText(ARect, Text, WordWrapEnabled, 1, [], HAlignment, VAlignment);
   end;
 end;
@@ -1654,7 +1654,7 @@ begin
   Canvas.Stroke.Color:=FGridLineColor;
   Canvas.Stroke.Thickness:=FGridLineWidth/2;
 
-  // Вычисляем начальную Y-координату для данных (после заголовков)
+  // Р’С‹С‡РёСЃР»СЏРµРј РЅР°С‡Р°Р»СЊРЅСѓСЋ Y-РєРѕРѕСЂРґРёРЅР°С‚Сѓ РґР»СЏ РґР°РЅРЅС‹С… (РїРѕСЃР»Рµ Р·Р°РіРѕР»РѕРІРєРѕРІ)
   StartX:=FGridLineWidth/4-ViewLeft;
   StartY:=-FGridLineWidth/4+HeaderHeight-ViewTop;
 
@@ -1663,25 +1663,25 @@ begin
   var TopRow:=RowAtHeightCoord(ViewTop);
   if TopRow<0 then Exit;
 
-  // Рисуем линии для данных (как раньше)
-  // Сначала рисуем все вертикальные линии
+  // Р РёСЃСѓРµРј Р»РёРЅРёРё РґР»СЏ РґР°РЅРЅС‹С… (РєР°Рє СЂР°РЅСЊС€Рµ)
+  // РЎРЅР°С‡Р°Р»Р° СЂРёСЃСѓРµРј РІСЃРµ РІРµСЂС‚РёРєР°Р»СЊРЅС‹Рµ Р»РёРЅРёРё
   X:=StartX;
   for i:=0 to FColCount do begin
-    // Внутренние вертикальные линии
+    // Р’РЅСѓС‚СЂРµРЅРЅРёРµ РІРµСЂС‚РёРєР°Р»СЊРЅС‹Рµ Р»РёРЅРёРё
     for j:=TopRow to FRowCount-1 do begin
       Y:=StartY+FRowData[j].Top;
       if FRowData[j].Top>ViewBottomCell then Break;
 
-      // Проверяем, не находится ли линия внутри объединенной ячейки
+      // РџСЂРѕРІРµСЂСЏРµРј, РЅРµ РЅР°С…РѕРґРёС‚СЃСЏ Р»Рё Р»РёРЅРёСЏ РІРЅСѓС‚СЂРё РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРё
       var ShouldDraw:=True;
 
-      // Проверяем ячейку слева
+      // РџСЂРѕРІРµСЂСЏРµРј СЏС‡РµР№РєСѓ СЃР»РµРІР°
       if IsMergedCell(i-1, j, MergedCell) then begin
         if i<MergedCell.Col+MergedCell.ColSpan then
           ShouldDraw:=False;
       end;
 
-      // Проверяем ячейку справа
+      // РџСЂРѕРІРµСЂСЏРµРј СЏС‡РµР№РєСѓ СЃРїСЂР°РІР°
       if ShouldDraw and IsMergedCell(i, j, MergedCell) then begin
         if i>MergedCell.Col then
           ShouldDraw:=False;
@@ -1696,7 +1696,7 @@ begin
       X:=X+GetColWidth(i);
   end;
 
-  // Затем рисуем все горизонтальные линии
+  // Р—Р°С‚РµРј СЂРёСЃСѓРµРј РІСЃРµ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Рµ Р»РёРЅРёРё
   for i:=TopRow to FRowCount do begin
     if i=0 then begin
       Y:=StartY+FRowData[i].Top;
@@ -1708,18 +1708,18 @@ begin
 
     X:=StartX;
     for j:=0 to FColCount-1 do begin
-      // Проверяем, не находится ли линия внутри объединенной ячейки
+      // РџСЂРѕРІРµСЂСЏРµРј, РЅРµ РЅР°С…РѕРґРёС‚СЃСЏ Р»Рё Р»РёРЅРёСЏ РІРЅСѓС‚СЂРё РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРё
       var ShouldDraw:=True;
-      // Внутренние горизонтальные линии
+      // Р’РЅСѓС‚СЂРµРЅРЅРёРµ РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Рµ Р»РёРЅРёРё
 
-      // Проверяем ячейку сверху
+      // РџСЂРѕРІРµСЂСЏРµРј СЏС‡РµР№РєСѓ СЃРІРµСЂС…Сѓ
       if IsMergedCell(j, i-1, MergedCell) then begin
         if i<MergedCell.Row+MergedCell.RowSpan then begin
           ShouldDraw:=False;
         end;
       end;
 
-      // Проверяем ячейку снизу
+      // РџСЂРѕРІРµСЂСЏРµРј СЏС‡РµР№РєСѓ СЃРЅРёР·Сѓ
       if ShouldDraw and IsMergedCell(j, i, MergedCell) then begin
         if i>MergedCell.Row then begin
           ShouldDraw:=False;
@@ -1737,7 +1737,7 @@ end;
 
 function TMultiHeaderGrid.MergeCells(ACol, ARow, AColSpan, ARowSpan: Integer): Boolean;
 begin
-  // Проверяем валидность диапазона
+  // РџСЂРѕРІРµСЂСЏРµРј РІР°Р»РёРґРЅРѕСЃС‚СЊ РґРёР°РїР°Р·РѕРЅР°
   if (ACol<0) or (ARow<0) or (ACol+AColSpan>FColCount) or (ARow+ARowSpan>FRowCount) then
     Exit(False);
 
@@ -1860,7 +1860,7 @@ begin
     Exit;
   end;
 
-  Result:=1; // Минимум одна строка
+  Result:=1; // РњРёРЅРёРјСѓРј РѕРґРЅР° СЃС‚СЂРѕРєР°
   PosStart:=1;
 
   while True do begin
@@ -1868,7 +1868,7 @@ begin
     if PosFound=0 then Break;
 
     Inc(Result);
-    PosStart:=PosFound+2; // Пропускаем #13#10
+    PosStart:=PosFound+2; // РџСЂРѕРїСѓСЃРєР°РµРј #13#10
   end;
 end;
 
@@ -1884,25 +1884,25 @@ begin
   Result:=0;
   StartPos:=1;
   while StartPos<=Length(Text) do begin
-    // Ищем конец строки
+    // РС‰РµРј РєРѕРЅРµС† СЃС‚СЂРѕРєРё
     EndPos:=Pos(#13#10, Text, StartPos);
 
     if EndPos=0 then begin
-      // Это последняя строка
+      // Р­С‚Рѕ РїРѕСЃР»РµРґРЅСЏСЏ СЃС‚СЂРѕРєР°
       LineLength:=Length(Text)-StartPos+1;
       if LineLength>Result then
         Result:=LineLength;
       Break;
     end else begin
-      // Вычисляем длину текущей строки
+      // Р’С‹С‡РёСЃР»СЏРµРј РґР»РёРЅСѓ С‚РµРєСѓС‰РµР№ СЃС‚СЂРѕРєРё
       LineLength:=EndPos-StartPos;
       if LineLength>Result then
         Result:=LineLength;
 
-      // Переходим к следующей строке
+      // РџРµСЂРµС…РѕРґРёРј Рє СЃР»РµРґСѓСЋС‰РµР№ СЃС‚СЂРѕРєРµ
       StartPos:=EndPos+1;
 
-      // Пропускаем возможный #10 после #13
+      // РџСЂРѕРїСѓСЃРєР°РµРј РІРѕР·РјРѕР¶РЅС‹Р№ #10 РїРѕСЃР»Рµ #13
       if (EndPos<=Length(Text)) and (Text[EndPos]=#13) and
          (StartPos<=Length(Text)) and (Text[StartPos]=#10) then
         Inc(StartPos);
@@ -1920,25 +1920,25 @@ begin
 
   StartPos:=1;
   while StartPos<=Length(Text) do begin
-    // Ищем конец строки
+    // РС‰РµРј РєРѕРЅРµС† СЃС‚СЂРѕРєРё
     EndPos:=Pos(#13#10, Text, StartPos);
 
     if EndPos=0 then begin
-      // Это последняя строка
+      // Р­С‚Рѕ РїРѕСЃР»РµРґРЅСЏСЏ СЃС‚СЂРѕРєР°
       LineLength:=Length(Text)-StartPos+1;
       if LineLength>Length(Result) then
         Result:=Copy(Text,StartPos,LineLength);
       Break;
     end else begin
-      // Вычисляем длину текущей строки
+      // Р’С‹С‡РёСЃР»СЏРµРј РґР»РёРЅСѓ С‚РµРєСѓС‰РµР№ СЃС‚СЂРѕРєРё
       LineLength:=EndPos-StartPos;
       if LineLength>Length(Result) then
         Result:=Copy(Text,StartPos,LineLength);
 
-      // Переходим к следующей строке
+      // РџРµСЂРµС…РѕРґРёРј Рє СЃР»РµРґСѓСЋС‰РµР№ СЃС‚СЂРѕРєРµ
       StartPos:=EndPos+1;
 
-      // Пропускаем возможный #10 после #13
+      // РџСЂРѕРїСѓСЃРєР°РµРј РІРѕР·РјРѕР¶РЅС‹Р№ #10 РїРѕСЃР»Рµ #13
       if (EndPos<=Length(Text)) and (Text[EndPos]=#13) and
          (StartPos<=Length(Text)) and (Text[StartPos]=#10) then
         Inc(StartPos);
@@ -1956,13 +1956,13 @@ begin
   var CellDelimterWidth:=FGridLineWidth/2;
   var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth+1;
 
-  // Оптимизация: если нет WordWrap, используем быстрый режим
+  // РћРїС‚РёРјРёР·Р°С†РёСЏ: РµСЃР»Рё РЅРµС‚ WordWrap, РёСЃРїРѕР»СЊР·СѓРµРј Р±С‹СЃС‚СЂС‹Р№ СЂРµР¶РёРј
   var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
   for i:=0 to FColCount-1 do begin
     MaxWidth:=0;
 
-    // Проверяем заголовки
+    // РџСЂРѕРІРµСЂСЏРµРј Р·Р°РіРѕР»РѕРІРєРё
     for j:=0 to FHeaderLevels.Count-1 do begin
       var Element:=FHeaderLevels.GetElementAtCell(i,j);
       if not Assigned(Element) then Continue;
@@ -1985,11 +1985,11 @@ begin
       end;
     end;
 
-    // Оптимизация: если в этом столбце нет WordWrap, используем оригинальную быструю логику
+    // РћРїС‚РёРјРёР·Р°С†РёСЏ: РµСЃР»Рё РІ СЌС‚РѕРј СЃС‚РѕР»Р±С†Рµ РЅРµС‚ WordWrap, РёСЃРїРѕР»СЊР·СѓРµРј РѕСЂРёРіРёРЅР°Р»СЊРЅСѓСЋ Р±С‹СЃС‚СЂСѓСЋ Р»РѕРіРёРєСѓ
     var ColHasWordWrap:=FWordWrap or FColData[i].WordWrap or FGridCellsHasWordWrap;
 
     if not ColHasWordWrap and UseFastMode then begin
-      // Быстрый режим
+      // Р‘С‹СЃС‚СЂС‹Р№ СЂРµР¶РёРј
       Canvas.Font.Assign(FCellFont);
       var FLetterWidth:=Canvas.TextWidth('V');
       var MaxLetters:=0.0;
@@ -2025,7 +2025,7 @@ begin
         end;
       end;
     end else begin
-      // Полный режим (с проверкой WordWrap)
+      // РџРѕР»РЅС‹Р№ СЂРµР¶РёРј (СЃ РїСЂРѕРІРµСЂРєРѕР№ WordWrap)
       for j:=0 to FRowCount-1 do begin
         var ColSpan:=1;
         var MergedCell:TMergedCell;
@@ -2043,7 +2043,7 @@ begin
 
         var CellStyle:=CellStyle[ActualCol,j];
 
-        // Определяем, включен ли перенос слов для этой ячейки
+        // РћРїСЂРµРґРµР»СЏРµРј, РІРєР»СЋС‡РµРЅ Р»Рё РїРµСЂРµРЅРѕСЃ СЃР»РѕРІ РґР»СЏ СЌС‚РѕР№ СЏС‡РµР№РєРё
         var WordWrapEnabled: Boolean;
         if CellStyle.WordWrapIsSet then begin
           WordWrapEnabled:=CellStyle.WordWrap;
@@ -2063,7 +2063,7 @@ begin
         end;
 
         if WordWrapEnabled then begin
-          // При WordWrap измеряем ширину самого длинного слова
+          // РџСЂРё WordWrap РёР·РјРµСЂСЏРµРј С€РёСЂРёРЅСѓ СЃР°РјРѕРіРѕ РґР»РёРЅРЅРѕРіРѕ СЃР»РѕРІР°
           var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
           var MaxWordWidth:=0.0;
           for var Word in Words do begin
@@ -2073,7 +2073,7 @@ begin
           end;
           MaxWidth:=Max(MaxWidth,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
         end else begin
-          // Без WordWrap измеряем все строки
+          // Р‘РµР· WordWrap РёР·РјРµСЂСЏРµРј РІСЃРµ СЃС‚СЂРѕРєРё
           var Lines:=Text.Split([#13#10]);
           for var Line in Lines do begin
             MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
@@ -2082,10 +2082,10 @@ begin
       end;
     end;
 
-    // Добавляем отступы
+    // Р”РѕР±Р°РІР»СЏРµРј РѕС‚СЃС‚СѓРїС‹
     MaxWidth:=MaxWidth+CellPaddingFull;
 
-    // Устанавливаем новую ширину
+    // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РЅРѕРІСѓСЋ С€РёСЂРёРЅСѓ
     var NewWidth:=Trunc(MaxWidth);
     if NewWidth<FDefaultColWidth then
       NewWidth:=FDefaultColWidth;
@@ -2123,7 +2123,7 @@ begin
   end;
 
   Canvas.Font.Assign(FCellFont);
-  var TH:=Canvas.TextHeight('А');
+  var TH:=Canvas.TextHeight('Рђ');
   var Text:='';
   for var Row:=FromRow to FRowCount-1 do begin
     if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
@@ -2144,7 +2144,7 @@ begin
 
       case ComputeMode of
         cmFast: begin
-          // Быстрый рассчет
+          // Р‘С‹СЃС‚СЂС‹Р№ СЂР°СЃСЃС‡РµС‚
 
           var CellStyle:=CellStyle[Col,Row];
           var ResTH:=TH;
@@ -2164,7 +2164,7 @@ begin
           MaxHeight:=Max(MaxHeight,TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
         cmSlow: begin
-          // Обычный рассчет
+          // РћР±С‹С‡РЅС‹Р№ СЂР°СЃСЃС‡РµС‚
 
           var CellStyle:=CellStyle[Col,Row];
           Canvas.Font.Assign(FCellFont);
@@ -2178,11 +2178,11 @@ begin
             Canvas.Font.Style:=CellStyle.FontStyle;
           end;
 
-          MaxHeight:=Max(MaxHeight,TextLines*Canvas.TextHeight('А')/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+          MaxHeight:=Max(MaxHeight,TextLines*Canvas.TextHeight('Рђ')/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
 
         cmFull: begin
-          // Рассчет с учетом WordWrap, медленно.
+          // Р Р°СЃСЃС‡РµС‚ СЃ СѓС‡РµС‚РѕРј WordWrap, РјРµРґР»РµРЅРЅРѕ.
 
           var AvailableWidth:=GetCellRect(Col,Row,MergedCell).Width;
 
@@ -2201,7 +2201,7 @@ begin
 
           var CellStyle:=CellStyle[ActualCol,ActualRow];
 
-          // Определяем, включен ли перенос слов
+          // РћРїСЂРµРґРµР»СЏРµРј, РІРєР»СЋС‡РµРЅ Р»Рё РїРµСЂРµРЅРѕСЃ СЃР»РѕРІ
           var WordWrapEnabled: Boolean;
           if CellStyle.WordWrapIsSet then begin
             WordWrapEnabled:=CellStyle.WordWrap;
@@ -2209,7 +2209,7 @@ begin
             WordWrapEnabled:=FWordWrap or FColData[ActualCol].WordWrap;
           end;
 
-          // Настраиваем шрифт
+          // РќР°СЃС‚СЂР°РёРІР°РµРј С€СЂРёС„С‚
           Canvas.Font.Assign(FCellFont);
           if CellStyle.FontNameIsSet then begin
             Canvas.Font.Family:=CellStyle.FontName;
@@ -2223,17 +2223,17 @@ begin
 
           var TextHeight:Single;
           if WordWrapEnabled and (Text<>'') then begin
-            // Используем MeasureText для расчета
+            // РСЃРїРѕР»СЊР·СѓРµРј MeasureText РґР»СЏ СЂР°СЃС‡РµС‚Р°
             var MeasureRect:=TRectF.Create(0,0,AvailableWidth,10000);
             Canvas.MeasureText(MeasureRect,Text,True,[],TTextAlign.Leading,TTextAlign.Leading);
             TextHeight:=MeasureRect.Height;
           end else begin
-            // Без WordWrap считаем переводы строк
+            // Р‘РµР· WordWrap СЃС‡РёС‚Р°РµРј РїРµСЂРµРІРѕРґС‹ СЃС‚СЂРѕРє
             var LineCount:=CountLines(Text);
-            TextHeight:=Canvas.TextHeight('А')*LineCount-LineCount*FGridLineWidth;
+            TextHeight:=Canvas.TextHeight('Рђ')*LineCount-LineCount*FGridLineWidth;
           end;
 
-          // Корректируем высоту
+          // РљРѕСЂСЂРµРєС‚РёСЂСѓРµРј РІС‹СЃРѕС‚Сѓ
           MaxHeight:=Max(MaxHeight,TextHeight/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
       end;
@@ -2300,13 +2300,13 @@ begin
   FLastClickIsOnCell:=False;
 
   if CanFocus and (Button=TMouseButton.mbLeft) then begin
-    // Устанавливаем фокус при клике
+    // РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј С„РѕРєСѓСЃ РїСЂРё РєР»РёРєРµ
     SetFocus;
     Invalidate;
   end;
 
   if Button=TMouseButton.mbLeft then begin
-    // Проверяем клик по заголовкам
+    // РџСЂРѕРІРµСЂСЏРµРј РєР»РёРє РїРѕ Р·Р°РіРѕР»РѕРІРєР°Рј
     if FResizeEnabled then begin
       var ResizeMode:=IsResizeArea(X, Y, StartCol, EndCol, Row);
 
@@ -2317,19 +2317,19 @@ begin
       end;
 
       if ResizeMode<>TResizeMode.rmNone then begin
-        // Захватываем мышь для продолжения перетаскивания за пределами компонента
+        // Р—Р°С…РІР°С‚С‹РІР°РµРј РјС‹С€СЊ РґР»СЏ РїСЂРѕРґРѕР»Р¶РµРЅРёСЏ РїРµСЂРµС‚Р°СЃРєРёРІР°РЅРёСЏ Р·Р° РїСЂРµРґРµР»Р°РјРё РєРѕРјРїРѕРЅРµРЅС‚Р°
         Capture;
         Exit;
       end;
     end;
 
-    // Проверяем клик по заголовкам
+    // РџСЂРѕРІРµСЂСЏРµРј РєР»РёРє РїРѕ Р·Р°РіРѕР»РѕРІРєР°Рј
     for i:=0 to FHeaderLevels.Count-1 do begin
       j:=0;
       while j<FColCount do begin
         Rect:=GetHeaderRect(i, j);
         if Rect.Contains(PointF(X, Y)) then begin
-          // Проверяем, является ли это объединенной ячейкой
+          // РџСЂРѕРІРµСЂСЏРµРј, СЏРІР»СЏРµС‚СЃСЏ Р»Рё СЌС‚Рѕ РѕР±СЉРµРґРёРЅРµРЅРЅРѕР№ СЏС‡РµР№РєРѕР№
           DoHeaderClick(i, j);
           Exit;
         end;
@@ -2339,7 +2339,7 @@ begin
       end;
     end;
 
-    // Проверяем ячейки данных
+    // РџСЂРѕРІРµСЂСЏРµРј СЏС‡РµР№РєРё РґР°РЅРЅС‹С…
     var TopRow:=RowAtHeightCoord(ViewTop);
     if TopRow<0 then Exit;
     var ViewBottom:=ViewTop+LocalRect.Top+LocalRect.Height+Margins.Bottom-HeaderHeight;
@@ -2373,7 +2373,7 @@ begin
     case FResizeMode of
       TResizeMode.rmColumn: begin
         if FResizeEndColumnIndex>=0 then begin
-          // Используем глобальные координаты для точного отслеживания
+          // РСЃРїРѕР»СЊР·СѓРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
           GlobalPos:=LocalToAbsolute(PointF(X, Y));
           NewWidth:=ResizeStartWidth+Round(GlobalPos.X-FResizeStartPos.X);
           UpdateColumnWidth(FResizeStartColumnIndex,FResizeEndColumnIndex, NewWidth);
@@ -2382,7 +2382,7 @@ begin
       end;
       TResizeMode.rmHeaderRow: begin
         if FResizeRowIndex>=0 then begin
-          // Используем глобальные координаты для точного отслеживания
+          // РСЃРїРѕР»СЊР·СѓРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
           GlobalPos:=LocalToAbsolute(PointF(X, Y));
           NewHeight:=FResizeStartHeight+Round(GlobalPos.Y-FResizeStartPos.Y);
           UpdateHeaderRowHeight(FResizeRowIndex, NewHeight);
@@ -2391,7 +2391,7 @@ begin
       end;
       TResizeMode.rmGridRow: begin
         if FResizeRowIndex>=0 then begin
-          // Используем глобальные координаты для точного отслеживания
+          // РСЃРїРѕР»СЊР·СѓРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
           GlobalPos:=LocalToAbsolute(PointF(X, Y));
           NewHeight:=FResizeStartHeight+Round(GlobalPos.Y-FResizeStartPos.Y);
           UpdateRowHeight(FResizeRowIndex, NewHeight);
@@ -2417,7 +2417,7 @@ begin
   inherited;
 
   if (Button=TMouseButton.mbLeft) then begin
-    // Завершаем изменение размера столбца
+    // Р—Р°РІРµСЂС€Р°РµРј РёР·РјРµРЅРµРЅРёРµ СЂР°Р·РјРµСЂР° СЃС‚РѕР»Р±С†Р°
     if FResizeMode<>TResizeMode.rmNone then begin
       DoColumnResized;
       FResizeStartColumnIndex:=-1;
@@ -2456,7 +2456,7 @@ begin
   if TPlatformServices.Current.SupportsPlatformService(IFMXClipboardService, IInterface(ClipboardService)) then begin
     ClipboardService.SetClipboard(AText);
   end else
-    raise Exception.Create('Сервис буфера обмена не поддерживается');
+    raise Exception.Create('РЎРµСЂРІРёСЃ Р±СѓС„РµСЂР° РѕР±РјРµРЅР° РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ');
 end;
 
 procedure TMultiHeaderGrid.KeyDown(var Key: Word; var KeyChar: WideChar; Shift: TShiftState);
@@ -2547,7 +2547,7 @@ begin
     end;
   end;
 
-  // Обработка ввода текста
+  // РћР±СЂР°Р±РѕС‚РєР° РІРІРѕРґР° С‚РµРєСЃС‚Р°
   if IsFocused and (KeyChar>=' ') and (KeyChar<='~') and not (ssCtrl in Shift) then begin
     StartCellEditing(FSelectedCell.X, FSelectedCell.Y, KeyChar);
     KeyChar:=#0;
@@ -2571,21 +2571,21 @@ begin
   if Length(FRowData)=0 then
     Exit;
 
-  // Быстрая проверка граничных случаев
+  // Р‘С‹СЃС‚СЂР°СЏ РїСЂРѕРІРµСЂРєР° РіСЂР°РЅРёС‡РЅС‹С… СЃР»СѓС‡Р°РµРІ
   if Y<FRowData[0].Top then
     Exit;
 
-  // Проверка последнего элемента
+  // РџСЂРѕРІРµСЂРєР° РїРѕСЃР»РµРґРЅРµРіРѕ СЌР»РµРјРµРЅС‚Р°
   CurrentBottom:=FRowData[High(FRowData)].Top+FRowData[High(FRowData)].Height;
   if Y>=CurrentBottom then
-    Exit(High(FRowData)); // или -1, в зависимости от требований
+    Exit(High(FRowData)); // РёР»Рё -1, РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ С‚СЂРµР±РѕРІР°РЅРёР№
 
-  // Бинарный поиск с целочисленной арифметикой
+  // Р‘РёРЅР°СЂРЅС‹Р№ РїРѕРёСЃРє СЃ С†РµР»РѕС‡РёСЃР»РµРЅРЅРѕР№ Р°СЂРёС„РјРµС‚РёРєРѕР№
   L:=0;
   R:=High(FRowData);
 
   while L<=R do begin
-    M:=(L+R) shr 1; // Быстрее, чем div 2
+    M:=(L+R) shr 1; // Р‘С‹СЃС‚СЂРµРµ, С‡РµРј div 2
 
     CurrentTop:=FRowData[M].Top;
     CurrentBottom:=CurrentTop+FRowData[M].Height;
@@ -2850,8 +2850,8 @@ end;
 
 procedure TMultiHeaderGrid.StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
 begin
-  // Реализация редактирования ячейки
-  // Можно создать TEdit поверх ячейки
+  // Р РµР°Р»РёР·Р°С†РёСЏ СЂРµРґР°РєС‚РёСЂРѕРІР°РЅРёСЏ СЏС‡РµР№РєРё
+  // РњРѕР¶РЅРѕ СЃРѕР·РґР°С‚СЊ TEdit РїРѕРІРµСЂС… СЏС‡РµР№РєРё
   if Assigned(FOnStartEditing) then
     FOnStartEditing(Self, ACol, ARow, InitialChar);
 end;
@@ -3097,12 +3097,12 @@ procedure TMultiHeaderGrid.SetResizeEnabled(const Value: Boolean);
 begin
   if FResizeEnabled<>Value then begin
     FResizeEnabled:=Value;
-    // Сбрасываем состояние изменения размера при отключении
+    // РЎР±СЂР°СЃС‹РІР°РµРј СЃРѕСЃС‚РѕСЏРЅРёРµ РёР·РјРµРЅРµРЅРёСЏ СЂР°Р·РјРµСЂР° РїСЂРё РѕС‚РєР»СЋС‡РµРЅРёРё
     if not Value then begin
       FResizeStartColumnIndex:=-1;
       FResizeEndColumnIndex:=-1;
       FResizeRowIndex:=-1;
-      ReleaseCapture; // Освобождаем захват мыши
+      ReleaseCapture; // РћСЃРІРѕР±РѕР¶РґР°РµРј Р·Р°С…РІР°С‚ РјС‹С€Рё
       Cursor:=crDefault;
     end;
   end;
@@ -3137,7 +3137,7 @@ begin
   if not FResizeEnabled then Exit;
 
   if Y<=HeaderHeight then begin
-    // Проверяем изменение ширины столбцов заголовка
+    // РџСЂРѕРІРµСЂСЏРµРј РёР·РјРµРЅРµРЅРёРµ С€РёСЂРёРЅС‹ СЃС‚РѕР»Р±С†РѕРІ Р·Р°РіРѕР»РѕРІРєР°
 
     if FResizeColEnabled then begin
       for i:=0 to FHeaderLevels.Count-1 do begin
@@ -3165,7 +3165,7 @@ begin
     end;
 
     if FResizeHeaderRowEnabled then begin
-      // Проверяем изменение высоты строк заголовка
+      // РџСЂРѕРІРµСЂСЏРµРј РёР·РјРµРЅРµРЅРёРµ РІС‹СЃРѕС‚С‹ СЃС‚СЂРѕРє Р·Р°РіРѕР»РѕРІРєР°
 
       for i:=0 to FHeaderLevels.Count-1 do begin
         Col:=0;
@@ -3191,12 +3191,12 @@ begin
     end;
   end else begin
     if FResizeRowEnabled then begin
-      // Проверяем изменение высоты строк грида
+      // РџСЂРѕРІРµСЂСЏРµРј РёР·РјРµРЅРµРЅРёРµ РІС‹СЃРѕС‚С‹ СЃС‚СЂРѕРє РіСЂРёРґР°
 
       for i:=0 to FRowCount-1 do begin
-        CellRect:=GetCellRect(0, i); // Получаем прямоугольник строки
+        CellRect:=GetCellRect(0, i); // РџРѕР»СѓС‡Р°РµРј РїСЂСЏРјРѕСѓРіРѕР»СЊРЅРёРє СЃС‚СЂРѕРєРё
         if not CellRect.IsEmpty then begin
-          // Проверяем нижнюю границу строки
+          // РџСЂРѕРІРµСЂСЏРµРј РЅРёР¶РЅСЋСЋ РіСЂР°РЅРёС†Сѓ СЃС‚СЂРѕРєРё
           ResizeRect:=TRectF.Create(
             CellRect.Left-FGridLineWidth/4,
             CellRect.Bottom-FResizeMargin-FGridLineWidth/4,
@@ -3224,7 +3224,7 @@ begin
   FResizeRowIndex:=-1;
   FResizeMode:=TResizeMode.rmColumn;
 
-  // Сохраняем глобальные координаты для точного отслеживания
+  // РЎРѕС…СЂР°РЅСЏРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
   GlobalPos:=LocalToAbsolute(PointF(X, 0));
   FResizeStartPos:=PointF(GlobalPos.X, 0);
 
@@ -3244,7 +3244,7 @@ begin
   FResizeEndColumnIndex:=-1;
   FResizeMode:=TResizeMode.rmHeaderRow;
 
-  // Сохраняем глобальные координаты для точного отслеживания
+  // РЎРѕС…СЂР°РЅСЏРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
   GlobalPos:=LocalToAbsolute(PointF(0, Y));
   FResizeStartPos:=PointF(0, GlobalPos.Y);
   FResizeStartHeight:=FHeaderLevels[ARow].Height;
@@ -3260,7 +3260,7 @@ begin
   FResizeEndColumnIndex:=-1;
   FResizeMode:=TResizeMode.rmGridRow;
 
-  // Сохраняем глобальные координаты для точного отслеживания
+  // РЎРѕС…СЂР°РЅСЏРµРј РіР»РѕР±Р°Р»СЊРЅС‹Рµ РєРѕРѕСЂРґРёРЅР°С‚С‹ РґР»СЏ С‚РѕС‡РЅРѕРіРѕ РѕС‚СЃР»РµР¶РёРІР°РЅРёСЏ
   GlobalPos:=LocalToAbsolute(PointF(0, Y));
   FResizeStartPos:=PointF(0, GlobalPos.Y);
   FResizeStartHeight:=GetRowHeight(ARow);
@@ -3275,22 +3275,22 @@ var
   ProportionalWidths: array of Integer;
 begin
   if TotalWidth<10*(EndCol-StartCol+1) then
-    TotalWidth:=10*(EndCol-StartCol+1); // Минимальная общая ширина
+    TotalWidth:=10*(EndCol-StartCol+1); // РњРёРЅРёРјР°Р»СЊРЅР°СЏ РѕР±С‰Р°СЏ С€РёСЂРёРЅР°
 
   GroupColCount:=EndCol-StartCol+1;
   SetLength(ProportionalWidths, GroupColCount);
 
-  // Вычисляем пропорциональные ширины на основе исходных соотношений
+  // Р’С‹С‡РёСЃР»СЏРµРј РїСЂРѕРїРѕСЂС†РёРѕРЅР°Р»СЊРЅС‹Рµ С€РёСЂРёРЅС‹ РЅР° РѕСЃРЅРѕРІРµ РёСЃС…РѕРґРЅС‹С… СЃРѕРѕС‚РЅРѕС€РµРЅРёР№
   RemainingWidth:=TotalWidth;
 
-  // Первый проход: вычисляем пропорциональные ширины
+  // РџРµСЂРІС‹Р№ РїСЂРѕС…РѕРґ: РІС‹С‡РёСЃР»СЏРµРј РїСЂРѕРїРѕСЂС†РёРѕРЅР°Р»СЊРЅС‹Рµ С€РёСЂРёРЅС‹
   var FResizeStartWidth:=ResizeStartWidth;
   for i:=0 to GroupColCount-1 do begin
     ProportionalWidths[i]:=Round(FResizeStartWidths[i]*TotalWidth/FResizeStartWidth);
     Dec(RemainingWidth, ProportionalWidths[i]);
   end;
 
-  // Второй проход: распределяем остаток
+  // Р’С‚РѕСЂРѕР№ РїСЂРѕС…РѕРґ: СЂР°СЃРїСЂРµРґРµР»СЏРµРј РѕСЃС‚Р°С‚РѕРє
   if RemainingWidth<>0 then begin
     for i:=0 to GroupColCount-1 do begin
       if RemainingWidth>0 then begin
@@ -3305,38 +3305,39 @@ begin
     end;
   end;
 
-  // Применяем новые ширины
+  // РџСЂРёРјРµРЅСЏРµРј РЅРѕРІС‹Рµ С€РёСЂРёРЅС‹
   for i:=StartCol to EndCol do begin
     NewWidth:=ProportionalWidths[i-StartCol];
     if NewWidth<10 then
-      NewWidth:=10; // Минимальная ширина столбца
+      NewWidth:=10; // РњРёРЅРёРјР°Р»СЊРЅР°СЏ С€РёСЂРёРЅР° СЃС‚РѕР»Р±С†Р°
 
     ColWidths[i]:=NewWidth;
   end;
 
   Invalidate;
 
-  // Обновляем горизонтальную прокрутку
-  if Assigned(HScrollBar) then
+  // РћР±РЅРѕРІР»СЏРµРј РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅСѓСЋ РїСЂРѕРєСЂСѓС‚РєСѓ
+  if Assigned(HScrollBar) then begin
     HScrollBar.Value:=FViewLeft;
+  end;
 end;
 
 procedure TMultiHeaderGrid.UpdateColumnWidth(StartCol, EndCol: Integer; NewWidth: Integer);
 begin
   if StartCol<EndCol then begin
-    // Ресайз группы колонок
+    // Р РµСЃР°Р№Р· РіСЂСѓРїРїС‹ РєРѕР»РѕРЅРѕРє
     UpdateGroupColumnWidth(StartCol, EndCol, NewWidth);
   end else begin
-    // Ресайз одной колонки
+    // Р РµСЃР°Р№Р· РѕРґРЅРѕР№ РєРѕР»РѕРЅРєРё
     if NewWidth<10 then begin
-      NewWidth:=10; // Минимальная ширина
+      NewWidth:=10; // РњРёРЅРёРјР°Р»СЊРЅР°СЏ С€РёСЂРёРЅР°
     end;
 
     ColWidths[EndCol]:=NewWidth;
 
     Invalidate;
 
-    // Обновляем горизонтальную прокрутку
+    // РћР±РЅРѕРІР»СЏРµРј РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅСѓСЋ РїСЂРѕРєСЂСѓС‚РєСѓ
     if Assigned(HScrollBar) then begin
       HScrollBar.Value:=FViewLeft;
     end;
@@ -3346,13 +3347,13 @@ end;
 procedure TMultiHeaderGrid.UpdateHeaderRowHeight(ARow: Integer; NewHeight: Integer);
 begin
   if NewHeight<10 then
-    NewHeight:=10; // Минимальная высота
+    NewHeight:=10; // РњРёРЅРёРјР°Р»СЊРЅР°СЏ РІС‹СЃРѕС‚Р°
 
   FHeaderLevels[ARow].Height:=NewHeight;
 
   Invalidate;
 
-  // Обновляем вертикальную прокрутку
+  // РћР±РЅРѕРІР»СЏРµРј РІРµСЂС‚РёРєР°Р»СЊРЅСѓСЋ РїСЂРѕРєСЂСѓС‚РєСѓ
   if Assigned(VScrollBar) then begin
     VScrollBar.BeginUpdate;
     VScrollBar.Value:=FViewTop;
@@ -3363,12 +3364,12 @@ end;
 procedure TMultiHeaderGrid.UpdateRowHeight(ARow: Integer; NewHeight: Integer);
 begin
   if NewHeight<10 then
-    NewHeight:=10; // Минимальная высота
+    NewHeight:=10; // РњРёРЅРёРјР°Р»СЊРЅР°СЏ РІС‹СЃРѕС‚Р°
 
   SetRowHeight(ARow, NewHeight);
   Invalidate;
 
-  // Обновляем вертикальную прокрутку
+  // РћР±РЅРѕРІР»СЏРµРј РІРµСЂС‚РёРєР°Р»СЊРЅСѓСЋ РїСЂРѕРєСЂСѓС‚РєСѓ
   if Assigned(VScrollBar) then begin
     VScrollBar.BeginUpdate;
     VScrollBar.Value:=FViewTop;
