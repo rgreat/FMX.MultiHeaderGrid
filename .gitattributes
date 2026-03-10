@@ -1,1 +1,1 @@
-*.pas text encoding=windows-1251
+*.pas working-tree-encoding=CP1251 eol=CRLF
