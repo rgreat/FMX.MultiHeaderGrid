@@ -33,6 +33,9 @@ type
     DS: TDataSource;
     Label2: TLabel;
     IL1: TImageList;
+    Panel2: TPanel;
+    ButtonAddRow: TButton;
+    ButtonDeleteRow: TButton;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
@@ -54,6 +57,8 @@ type
     procedure WordWrapCheckBoxChange(Sender: TObject);
     procedure Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
       IsSelected: Boolean; const Text: string; var Handled: Boolean);
+    procedure ButtonDeleteRowClick(Sender: TObject);
+    procedure ButtonAddRowClick(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -103,28 +108,27 @@ begin
     G.DataSource:=DS;
 
     G.Header.First.Height:=70;
-    G.Column('id').Caption:='Внутренний'#13#10'идентификатор';
-    G.Column('klns').Caption:='Номер'#13#10'класса'#13#10'обслуживания';
-    G.Column('kldotpn').Caption:='Начальная'#13#10'дата'#13#10'отправления';
-    G.Column('kldotpk').Caption:='Конечная'#13#10'дата'#13#10'отправления';
-    G.Column('klkod').Caption:='Символьный'#13#10'код'#13#10'класса';
-    G.Column('klnazv').Caption:='Название'#13#10'класса'#13#10'обслуживания';
-    G.Column('klname').Caption:='Развернутое имя';
-    G.Column('kltip').Caption:='Тип вагона';
-    G.Column('klabd').Caption:='Код класса'#13#10'в УЗ';
-    G.Column('klsob').Caption:='Сетевой'#13#10'код'#13#10'перевозчика'#13#10'или 0';
-    G.Column('klntstp').Caption:='Условный уровень'#13#10'комфортности для'#13#10'сравнения классов';
-    G.Column('klfl05').Caption:='Признак'#13#10'вагон'#13#10'повышенной'#13#10'комфортности';
-    G.Column('klpr05').Caption:='Признак'#13#10'белье'#13#10'по желанию';
-    G.Column('klpr06').Caption:='Признак'#13#10'бизнес-класс';
-    G.Column('klf2f1').Caption:='Признак'#13#10'«обязательно'#13#10'4 места'#13#10'в одном заказе»';
-    G.Column('klf2f2').Caption:='Признак'#13#10'«сервис на'#13#10'одного'#13#10'пассажира»';
-    G.Column('klfl04').Caption:='Признак'#13#10'«обязательно 2 места'#13#10'в одном заказе»';
-    G.Column('cor_tip').Caption:='Тип'#13#10'корректировки';
-    G.Column('cor_time').Caption:='Время'#13#10'обновления';
-
+    G.Column('id').Caption:='Internal'#13#10'identifier';
+    G.Column('klns').Caption:='Service'#13#10'class'#13#10'number';
+    G.Column('kldotpn').Caption:='Departure'#13#10'start'#13#10'date';
+    G.Column('kldotpk').Caption:='Departure'#13#10'end'#13#10'date';
+    G.Column('klkod').Caption:='Class'#13#10'character'#13#10'code';
+    G.Column('klnazv').Caption:='Service'#13#10'class'#13#10'name';
+    G.Column('klname').Caption:='Full name';
+    G.Column('kltip').Caption:='Car type';
+    G.Column('klabd').Caption:='Class code'#13#10'in UZ';
+    G.Column('klsob').Caption:='Carrier'#13#10'network'#13#10'code'#13#10'or 0';
+    G.Column('klntstp').Caption:='Conditional comfort'#13#10'level for'#13#10'class comparison';
+    G.Column('klfl05').Caption:='High'#13#10'comfort'#13#10'car'#13#10'flag';
+    G.Column('klpr05').Caption:='Linen'#13#10'on request'#13#10'flag';
+    G.Column('klpr06').Caption:='Business class'#13#10'flag';
+    G.Column('klf2f1').Caption:='"Mandatory'#13#10'4 seats'#13#10'per order"'#13#10'flag';
+    G.Column('klf2f2').Caption:='"Single'#13#10'passenger'#13#10'service"'#13#10'flag';
+    G.Column('klfl04').Caption:='"Mandatory 2 seats'#13#10'per order"'#13#10'flag';
+    G.Column('cor_tip').Caption:='Correction'#13#10'type';
+    G.Column('cor_time').Caption:='Update'#13#10'time';
     var Row:=G.Header.AddRowOnTop;
-    var Cell:=Row.FillRow('Справочник классов обслуживания вагонов пассажирских поездов Экспресс');
+    var Cell:=Row.FillRow('Reference catalog of service classes for Express passenger train cars');
     Cell.Style.CellColor:=TAlphaColors.Lightblue;
 
     Grid.AutoSize;
@@ -347,6 +351,18 @@ end;
 procedure TForm1.ButtonClearMergeCellsClick(Sender: TObject);
 begin
   ActiveGrid.ClearMergedCells;
+end;
+
+procedure TForm1.ButtonAddRowClick(Sender: TObject);
+begin
+  CDS.Insert;
+  CDS.FieldByName('id').AsInteger:=Random(MaxInt);
+  CDS.Post;
+end;
+
+procedure TForm1.ButtonDeleteRowClick(Sender: TObject);
+begin
+  CDS.Delete;
 end;
 
 procedure TForm1.ButtonBenchmarkClick(Sender: TObject);

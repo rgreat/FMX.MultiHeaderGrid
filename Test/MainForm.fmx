@@ -216,7 +216,7 @@ object Form1: TForm1
         Margins.Right = 4.000000000000000000
         Margins.Bottom = 4.000000000000000000
         Size.Width = 822.000000000000000000
-        Size.Height = 392.000000000000000000
+        Size.Height = 359.000000000000000000
         Size.PlatformDefault = False
         RowCount = 0
         Col = -1
@@ -225,6 +225,7 @@ object Form1: TForm1
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
+        RowSelect = True
         OnDrawCell = Grid3DrawCell
         RowCacheSize = 0
         object Label2: TLabel
@@ -234,6 +235,33 @@ object Form1: TForm1
           TextSettings.FontColor = xFFE5FFCA
           Text = 'Label2'
           TabOrder = 2
+        end
+      end
+      object Panel2: TPanel
+        Align = Top
+        Size.Width = 830.000000000000000000
+        Size.Height = 33.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 3
+        object ButtonAddRow: TButton
+          Position.X = 8.000000000000000000
+          Position.Y = 7.000000000000000000
+          Size.Width = 67.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 1
+          Text = 'Add Row'
+          OnClick = ButtonAddRowClick
+        end
+        object ButtonDeleteRow: TButton
+          Position.X = 83.000000000000000000
+          Position.Y = 7.000000000000000000
+          Size.Width = 67.000000000000000000
+          Size.Height = 22.000000000000000000
+          Size.PlatformDefault = False
+          TabOrder = 0
+          Text = 'Delete Row'
+          OnClick = ButtonDeleteRowClick
         end
       end
     end
