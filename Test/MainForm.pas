@@ -24,14 +24,13 @@ type
     StatusText: TLabel;
     Grid1: TMultiHeaderGrid;
     Grid2: TMultiHeaderStringGrid;
+    Grid3: TMultiHeaderDBGrid;
     RowSelectCheckBox: TCheckBox;
     ButtonFillCells: TButton;
     WordWrapCheckBox: TCheckBox;
     TabItem3: TTabItem;
-    Grid3: TMultiHeaderDBGrid;
     CDS: TClientDataSet;
     DS: TDataSource;
-    Label2: TLabel;
     IL1: TImageList;
     Panel2: TPanel;
     ButtonAddRow: TButton;

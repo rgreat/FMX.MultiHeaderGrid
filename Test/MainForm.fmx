@@ -228,14 +228,6 @@ object Form1: TForm1
         RowSelect = True
         OnDrawCell = Grid3DrawCell
         RowCacheSize = 0
-        object Label2: TLabel
-          StyledSettings = [Family, Size, Style]
-          Position.X = 64.000000000000000000
-          Position.Y = 104.000000000000000000
-          TextSettings.FontColor = xFFE5FFCA
-          Text = 'Label2'
-          TabOrder = 2
-        end
       end
       object Panel2: TPanel
         Align = Top
