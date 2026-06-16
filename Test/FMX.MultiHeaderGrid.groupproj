@@ -6,6 +6,9 @@
         <Projects Include="..\MultiHeaderGrid.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj">
+            <Dependencies/>
+        </Projects>
         <Projects Include="Test.dproj">
             <Dependencies/>
         </Projects>
@@ -26,6 +29,15 @@
     <Target Name="MultiHeaderGrid:Make">
         <MSBuild Projects="..\MultiHeaderGrid.dproj" Targets="Make"/>
     </Target>
+    <Target Name="MultiHeaderGridDsgn">
+        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj"/>
+    </Target>
+    <Target Name="MultiHeaderGridDsgn:Clean">
+        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MultiHeaderGridDsgn:Make">
+        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Test">
         <MSBuild Projects="Test.dproj"/>
     </Target>
@@ -36,13 +48,13 @@
         <MSBuild Projects="Test.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="MultiHeaderGrid;Test"/>
+        <CallTarget Targets="MultiHeaderGrid;MultiHeaderGridDsgn;Test"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="MultiHeaderGrid:Clean;Test:Clean"/>
+        <CallTarget Targets="MultiHeaderGrid:Clean;MultiHeaderGridDsgn:Clean;Test:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="MultiHeaderGrid:Make;Test:Make"/>
+        <CallTarget Targets="MultiHeaderGrid:Make;MultiHeaderGridDsgn:Make;Test:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
