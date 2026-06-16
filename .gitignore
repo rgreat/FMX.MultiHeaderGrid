@@ -10,3 +10,6 @@ __history
 __recovery
 Win32
 /MultiHeaderGrid.dproj
+*.dcu
+*.dproj
+*.exe
