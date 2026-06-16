@@ -152,6 +152,91 @@ type
   end;
 
   TMultiHeaderGrid = class;
+  TMHGHeaderColumns = class;
+
+  // Base, non-data-bound column descriptor shared by all grids. Carries
+  // everything needed to build a (possibly grouped, multi-row) header and
+  // to lay out a column: Title, GroupHeader/Separator, widths, word wrap
+  // and the four alignments. The data-bound TMHGColumn (DB grid) extends
+  // this with FieldName and per-column data Color.
+  TMHGHeaderColumn = class(TCollectionItem)
+  private
+    FTitle                 : string;
+    FWidth                 : Integer;
+    FMinWidth              : Integer;
+    FMaxWidth              : Integer;
+    FVisible               : Boolean;
+    FWordWrap              : Boolean;
+    FAlignment             : TTextAlign;        // data cells, horizontal
+    FVertAlignment         : TTextAlign;        // data cells, vertical
+    FHeaderAlignment       : TTextAlign;        // header, horizontal
+    FHeaderVertAlignment   : TTextAlign;        // header, vertical
+    FGroupHeader           : string;
+    FGroupHeaderSeparator  : Char;
+
+    procedure SetTitle(const Value: string);
+    procedure SetWidth(const Value: Integer);
+    procedure SetMinWidth(const Value: Integer);
+    procedure SetMaxWidth(const Value: Integer);
+    procedure SetVisible(const Value: Boolean);
+    procedure SetWordWrap(const Value: Boolean);
+    procedure SetAlignment(const Value: TTextAlign);
+    procedure SetVertAlignment(const Value: TTextAlign);
+    procedure SetHeaderAlignment(const Value: TTextAlign);
+    procedure SetHeaderVertAlignment(const Value: TTextAlign);
+    procedure SetGroupHeader(const Value: string);
+    procedure SetGroupHeaderSeparator(const Value: Char);
+  protected
+    function GetDisplayName: string; override;
+    // Splits GroupHeader into its individual group-level captions.
+    function GroupPath: TArray<string>;
+    procedure Changed;
+  public
+    constructor Create(Collection: TCollection); override;
+    procedure Assign(Source: TPersistent); override;
+
+    // Sets several common properties at once; returns Self for chaining.
+    // Width/MinWidth/MaxWidth of -1 mean "leave unchanged".
+    function SetProps(const ATitle: string;
+                      const AGroupHeader: string = '';
+                      AWidth: Integer = -1;
+                      AAlignment: TTextAlign = TTextAlign.Leading;
+                      AMinWidth: Integer = -1;
+                      AMaxWidth: Integer = -1): TMHGHeaderColumn;
+  published
+    property Title: string read FTitle write SetTitle;
+    property Width: Integer read FWidth write SetWidth default 80;
+    property MinWidth: Integer read FMinWidth write SetMinWidth default 0;
+    property MaxWidth: Integer read FMaxWidth write SetMaxWidth default 0;
+    property Visible: Boolean read FVisible write SetVisible default True;
+    property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
+    property Alignment: TTextAlign read FAlignment write SetAlignment default TTextAlign.Leading;
+    property VertAlignment: TTextAlign read FVertAlignment write SetVertAlignment default TTextAlign.Center;
+    property HeaderAlignment: TTextAlign read FHeaderAlignment write SetHeaderAlignment default TTextAlign.Center;
+    property HeaderVertAlignment: TTextAlign read FHeaderVertAlignment write SetHeaderVertAlignment default TTextAlign.Center;
+    property GroupHeader: string read FGroupHeader write SetGroupHeader;
+    property GroupHeaderSeparator: Char read FGroupHeaderSeparator write SetGroupHeaderSeparator default ';';
+  end;
+
+  TMHGHeaderColumns = class(TOwnedCollection)
+  private
+    FGrid: TMultiHeaderGrid;
+    function GetItem(Index: Integer): TMHGHeaderColumn;
+    procedure SetItem(Index: Integer; const Value: TMHGHeaderColumn);
+  protected
+    procedure Update(Item: TCollectionItem); override;
+  public
+    // AItemClass lets the data-bound TMHGColumns reuse this collection
+    // with its richer item class (TMHGColumn) without a virtual call
+    // during construction.
+    constructor Create(AGrid: TMultiHeaderGrid;
+                       AItemClass: TCollectionItemClass = nil); reintroduce; overload;
+    function Add: TMHGHeaderColumn;
+    function AddColumn(const ATitle: string = '';
+                       const AGroupHeader: string = ''): TMHGHeaderColumn;
+    property Grid: TMultiHeaderGrid read FGrid;
+    property Items[Index: Integer]: TMHGHeaderColumn read GetItem write SetItem; default;
+  end;
 
   THeaderLevels = class(TObjectList<THeaderLevel>)
     Grid : TMultiHeaderGrid;
@@ -267,11 +352,26 @@ type
 
       FRowSelect: Boolean;
       FWordWrap: Boolean;
+      FHeaderWordWrap: Boolean;
+      FHeaderColumns: TMHGHeaderColumns;
+      FRebuildingHeaderColumns: Boolean;
       FGridCellsHasWordWrap: boolean;
       FVerticalScroll: TScrollShowMode;
       FHorisontalScroll: TScrollShowMode;
 
     function ResizeStartWidth: Integer;
+    procedure SetHeaderWordWrap(const Value: Boolean);
+    procedure SetHeaderColumns(const Value: TMHGHeaderColumns);
+    // Builds a (possibly grouped, multi-row) header + applies column
+    // geometry/alignment/wordwrap from a TMHGHeaderColumns collection.
+    // Shared by the base grid (HeaderColumns) and reused conceptually by
+    // the DB grid. AVisible returns the visible items in order.
+    procedure BuildHeaderFromColumns(const ACols: array of TMHGHeaderColumn);
+    procedure RebuildFromHeaderColumns;
+    // True when wrapping applies to the header element at (ALevel,ACol).
+    function HeaderCellWordWrap(AElement: THeaderElement): Boolean;
+    // Width available to a header element's text (merged rect, padded).
+    function HeaderElementTextWidth(ALevel, ACol: Integer): Single;
 
     procedure StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
     procedure SetRowCount(Value: Integer);
@@ -294,6 +394,8 @@ type
     function GetCellRect(ACol, ARow: Integer; out MergedCell: TMergedCell): TRectF; overload;
     function GetMergedCellRect(ACol, ARow: Integer): TRectF;
     function GetHeaderRect(ALevel, ACol: Integer): TRectF;
+    function HeaderCellIsFiller(ALevel, ACol: Integer): Boolean;
+    function HeaderMergedRect(ALevel, ACol: Integer): TRectF;
     procedure DrawGridLines(Canvas: TCanvas);
     procedure DrawCells(Canvas: TCanvas);
     procedure DrawHeaders(Canvas: TCanvas);
@@ -396,6 +498,9 @@ type
     procedure AutoSizeRows(ForcePrecise: boolean = False); overload;
     procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False); overload;
     procedure AutoSizeVisibleRows;
+    // Sizes each header level's height to fit its (optionally wrapped or
+    // multi-line) captions. Shared by all grid descendants.
+    procedure AutoSizeHeaders;
     procedure AutoSize(ForcePrecise: boolean = False);
 
     procedure ClearSelection;
@@ -487,6 +592,14 @@ type
 
     property RowSelect: Boolean read FRowSelect write SetRowSelect default False;
     property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
+    // When set, header captions wrap to the cell width during drawing and
+    // are accounted for by AutoSizeHeaders. On by default.
+    property HeaderWordWrap: Boolean read FHeaderWordWrap write SetHeaderWordWrap default True;
+    // Declarative header/column definitions for the non-data-bound grids.
+    // When populated they build the (grouped) header and set column
+    // widths/alignment/word wrap. When empty the grid keeps whatever
+    // header was created procedurally via Header.AddRow.
+    property HeaderColumns: TMHGHeaderColumns read FHeaderColumns write SetHeaderColumns;
 
     property HorisontalScroll: TScrollShowMode read FHorisontalScroll write SetHorisontalScroll default TScrollShowMode.smAuto;
     property VerticalScroll: TScrollShowMode read FVerticalScroll write SetVerticalScroll default TScrollShowMode.smAuto;
@@ -533,6 +646,72 @@ type
   end;
 
   TMultiHeaderDBGrid = class;
+  TMHGColumns = class;
+
+  // Single column of TMultiHeaderDBGrid. Extends the shared
+  // TMHGHeaderColumn (Title, GroupHeader, widths, alignments, word wrap)
+  // with the data-bound bits: FieldName and a per-column data Color.
+  //
+  // Multi-line grouped headers are produced exactly as in UniGUI:
+  // GroupHeader holds one or more group captions joined with
+  // GroupHeaderSeparator (default ';'). Adjacent columns that share the
+  // same leading group path are merged into spanning header cells.
+  TMHGColumn = class(TMHGHeaderColumn)
+  private
+    FFieldName  : string;
+    FColor      : TAlphaColor;
+    FColorIsSet : Boolean;
+
+    function GetGrid: TMultiHeaderDBGrid;
+    procedure SetFieldName(const Value: string);
+    procedure SetColor(const Value: TAlphaColor);
+    function IsColorStored: Boolean;
+  protected
+    function GetDisplayName: string; override;
+  public
+    constructor Create(Collection: TCollection); override;
+    procedure Assign(Source: TPersistent); override;
+
+    property Grid: TMultiHeaderDBGrid read GetGrid;
+    // Effective text colour flag (Color only matters when explicitly set).
+    property ColorIsSet: Boolean read FColorIsSet;
+  published
+    // Name of the DataSet field shown in this column.
+    property FieldName: string read FFieldName write SetFieldName;
+    // Background colour of the data cells of this column.
+    property Color: TAlphaColor read FColor write SetColor stored IsColorStored;
+  end;
+
+  TMHGColumns = class(TOwnedCollection)
+  private
+    FGrid: TMultiHeaderDBGrid;
+    function GetItem(Index: Integer): TMHGColumn;
+    procedure SetItem(Index: Integer; const Value: TMHGColumn);
+  protected
+    procedure Update(Item: TCollectionItem); override;
+  public
+    constructor Create(AGrid: TMultiHeaderDBGrid);
+
+    function Add: TMHGColumn;
+    function AddColumn(const AFieldName: string;
+                       const ATitle: string = '';
+                       const AGroupHeader: string = ''): TMHGColumn;
+    function FindByFieldName(const AFieldName: string): TMHGColumn;
+    // Alters several basic properties of the column with the given field
+    // name in one call (one rebuild). Width/MinWidth/MaxWidth of -1 mean
+    // "leave unchanged". Returns the column (nil if the field name is not
+    // found).
+    function SetColumnProps(const AFieldName: string;
+                            const ATitle: string;
+                            const AGroupHeader: string = '';
+                            AWidth: Integer = -1;
+                            AAlignment: TTextAlign = TTextAlign.Leading;
+                            AMinWidth: Integer = -1;
+                            AMaxWidth: Integer = -1): TMHGColumn;
+
+    property Grid: TMultiHeaderDBGrid read FGrid;
+    property Items[Index: Integer]: TMHGColumn read GetItem write SetItem; default;
+  end;
 
   // TDataLink through which TMultiHeaderDBGrid tracks changes
   // in DataSet/DataSource - open/close, cursor movement,
@@ -566,14 +745,27 @@ type
       FCellTexts: TRowsData;
       FRowCacheSize: integer;
       FUpdatingRow: Boolean; // guards against recursion when syncing Row <-> DataSet.RecNo
+      FColumns: TMHGColumns;
+      FAutoCreateColumnsOnOpen: Boolean;
+      FRebuildingHeader: Boolean; // guards ResetTable re-entrancy from column changes
+      // Effective column-index -> collection item, rebuilt by ResetTable.
+      // Lets DoGetCellStyle read a column's Color in O(1) per cell.
+      FColMap: TArray<TMHGColumn>;
 
     function GetDataSource: TDataSource;
     procedure SetDataSource(const Value: TDataSource);
     procedure SetRowCacheSize(const Value: integer);
+    procedure SetColumns(const Value: TMHGColumns);
     procedure CleanUpCache;
     function GetVisibleFields: TArray<TField>;
     function GetRowData(ARow: Integer): TDBRowData;
     procedure SetFieldValue(DS: TDataSet; Field: TField; const Text: string);
+    // Builds the multi-row grouped header from the Columns collection.
+    procedure BuildGroupedHeader(const AFields: TArray<TField>;
+                                 const ACols: TArray<TMHGColumn>);
+    // Resolves the effective field list, honouring the Columns collection
+    // when populated and falling back to the DataSet's visible fields.
+    function ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
   protected
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
     procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
@@ -606,9 +798,23 @@ type
     function DataSet: TDataSet;
     function Column(FieldNum: integer): THeaderElement; overload;
     function Column(FieldName: string): THeaderElement; overload;
+
+    // Re-reads the DataSet's field list and (re)creates a default
+    // Columns entry for every visible field that is not yet present.
+    // Existing columns (and their grouping) are preserved. Useful after
+    // opening a DataSet when columns were not predefined at design time.
+    procedure AutoCreateColumns;
   published
     property DataSource: TDataSource read GetDataSource write SetDataSource;
     property RowCacheSize: integer read FRowCacheSize write SetRowCacheSize default 1000;
+    // When True (default) and no Columns are defined, opening the
+    // DataSet/DataSource auto-creates one column per visible field.
+    property AutoCreateColumnsOnOpen: Boolean read FAutoCreateColumnsOnOpen
+                                               write FAutoCreateColumnsOnOpen default True;
+    // Declarative column definitions. When empty the grid falls back to
+    // building a single-row header from the DataSet's visible fields
+    // (preserving the original behaviour).
+    property Columns: TMHGColumns read FColumns write SetColumns;
   end;
 
 procedure Register;
@@ -617,6 +823,10 @@ implementation
 
 uses
   System.SysUtils, System.Math, FMX.Platform, System.StrUtils;
+
+// Forward declarations for unit-local text helpers used by methods that
+// appear earlier in the implementation than the functions themselves.
+function CountLines(const Text: string): Integer; forward;
 
 procedure Register;
 begin
@@ -807,6 +1017,151 @@ begin
   Result:=CellStyle.ParentRow;
 end;
 
+{ TMHGHeaderColumn }
+
+constructor TMHGHeaderColumn.Create(Collection: TCollection);
+begin
+  inherited;
+  FWidth:=80;
+  FMinWidth:=0;
+  FMaxWidth:=0;
+  FVisible:=True;
+  FWordWrap:=False;
+  FAlignment:=TTextAlign.Leading;
+  FVertAlignment:=TTextAlign.Center;
+  FHeaderAlignment:=TTextAlign.Center;
+  FHeaderVertAlignment:=TTextAlign.Center;
+  FGroupHeaderSeparator:=';';
+end;
+
+procedure TMHGHeaderColumn.Assign(Source: TPersistent);
+begin
+  if Source is TMHGHeaderColumn then begin
+    var C:=TMHGHeaderColumn(Source);
+    FTitle:=C.FTitle;
+    FWidth:=C.FWidth;
+    FMinWidth:=C.FMinWidth;
+    FMaxWidth:=C.FMaxWidth;
+    FVisible:=C.FVisible;
+    FWordWrap:=C.FWordWrap;
+    FAlignment:=C.FAlignment;
+    FVertAlignment:=C.FVertAlignment;
+    FHeaderAlignment:=C.FHeaderAlignment;
+    FHeaderVertAlignment:=C.FHeaderVertAlignment;
+    FGroupHeader:=C.FGroupHeader;
+    FGroupHeaderSeparator:=C.FGroupHeaderSeparator;
+    Changed;
+  end else
+    inherited;
+end;
+
+function TMHGHeaderColumn.SetProps(const ATitle: string; const AGroupHeader: string;
+  AWidth: Integer; AAlignment: TTextAlign; AMinWidth: Integer; AMaxWidth: Integer): TMHGHeaderColumn;
+begin
+  var Coll:=Collection;
+  if Coll<>nil then Coll.BeginUpdate;
+  try
+    FTitle:=ATitle;
+    FGroupHeader:=AGroupHeader;
+    FAlignment:=AAlignment;
+    if AWidth>=0 then FWidth:=AWidth;
+    if AMinWidth>=0 then FMinWidth:=AMinWidth;
+    if AMaxWidth>=0 then FMaxWidth:=AMaxWidth;
+    Changed;
+  finally
+    if Coll<>nil then Coll.EndUpdate;
+  end;
+  Result:=Self;
+end;
+
+function TMHGHeaderColumn.GetDisplayName: string;
+begin
+  if FTitle<>'' then Result:=FTitle else Result:=inherited GetDisplayName;
+end;
+
+function TMHGHeaderColumn.GroupPath: TArray<string>;
+begin
+  if FGroupHeader='' then Exit(nil);
+  if FGroupHeaderSeparator=#0 then Exit(TArray<string>.Create(FGroupHeader));
+  Result:=FGroupHeader.Split([FGroupHeaderSeparator]);
+  var NLen:=Length(Result);
+  while (NLen>0) and (Result[NLen-1]='') do Dec(NLen);
+  SetLength(Result,NLen);
+end;
+
+procedure TMHGHeaderColumn.Changed;
+begin
+  inherited Changed(False);
+end;
+
+procedure TMHGHeaderColumn.SetTitle(const Value: string);
+begin if FTitle<>Value then begin FTitle:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetWidth(const Value: Integer);
+begin if FWidth<>Value then begin FWidth:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetMinWidth(const Value: Integer);
+begin if FMinWidth<>Value then begin FMinWidth:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetMaxWidth(const Value: Integer);
+begin if FMaxWidth<>Value then begin FMaxWidth:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetVisible(const Value: Boolean);
+begin if FVisible<>Value then begin FVisible:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetWordWrap(const Value: Boolean);
+begin if FWordWrap<>Value then begin FWordWrap:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetAlignment(const Value: TTextAlign);
+begin if FAlignment<>Value then begin FAlignment:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetVertAlignment(const Value: TTextAlign);
+begin if FVertAlignment<>Value then begin FVertAlignment:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetHeaderAlignment(const Value: TTextAlign);
+begin if FHeaderAlignment<>Value then begin FHeaderAlignment:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetHeaderVertAlignment(const Value: TTextAlign);
+begin if FHeaderVertAlignment<>Value then begin FHeaderVertAlignment:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetGroupHeader(const Value: string);
+begin if FGroupHeader<>Value then begin FGroupHeader:=Value; Changed; end; end;
+procedure TMHGHeaderColumn.SetGroupHeaderSeparator(const Value: Char);
+begin if FGroupHeaderSeparator<>Value then begin FGroupHeaderSeparator:=Value; Changed; end; end;
+
+{ TMHGHeaderColumns }
+
+constructor TMHGHeaderColumns.Create(AGrid: TMultiHeaderGrid;
+  AItemClass: TCollectionItemClass = nil);
+begin
+  if AItemClass=nil then AItemClass:=TMHGHeaderColumn;
+  inherited Create(AGrid, AItemClass);
+  FGrid:=AGrid;
+end;
+
+function TMHGHeaderColumns.GetItem(Index: Integer): TMHGHeaderColumn;
+begin
+  Result:=TMHGHeaderColumn(inherited Items[Index]);
+end;
+
+procedure TMHGHeaderColumns.SetItem(Index: Integer; const Value: TMHGHeaderColumn);
+begin
+  inherited Items[Index]:=Value;
+end;
+
+procedure TMHGHeaderColumns.Update(Item: TCollectionItem);
+begin
+  inherited;
+  if FGrid<>nil then FGrid.RebuildFromHeaderColumns;
+end;
+
+function TMHGHeaderColumns.Add: TMHGHeaderColumn;
+begin
+  Result:=TMHGHeaderColumn(inherited Add);
+end;
+
+function TMHGHeaderColumns.AddColumn(const ATitle, AGroupHeader: string): TMHGHeaderColumn;
+begin
+  BeginUpdate;
+  try
+    Result:=Add;
+    Result.Title:=ATitle;
+    Result.GroupHeader:=AGroupHeader;
+  finally
+    EndUpdate;
+  end;
+end;
+
 { TCustomMultiHeaderGrid }
 
 constructor TMultiHeaderGrid.Create(AOwner: TComponent);
@@ -820,6 +1175,8 @@ begin
   FDefaultColWidth:=80;
   FDefaultRowHeight:=20;
   FGridLines:=True;
+  FHeaderWordWrap:=True;
+  FHeaderColumns:=TMHGHeaderColumns.Create(Self);
   FGridLineColor:=TAlphaColors.Gray;
   FHeaderLineColor:=TAlphaColors.Black;
   FGridLineWidth:=1;
@@ -923,6 +1280,7 @@ begin
   ReleaseCapture;
 
   FHeaderLevels.Free;
+  FHeaderColumns.Free;
   FCellFont.Free;
   FHeaderFont.Free;
   CellPadding.Free;
@@ -1440,12 +1798,44 @@ begin
   for i:=0 to FHeaderLevels.Count-1 do begin
     j:=0;
     for var Element in FHeaderLevels[i] do begin
-      DrawHeaderCell(Canvas, i, j+Element.ColSkip);
+      // Blank fillers are not drawn here; the title cell beneath the
+      // stack draws the whole merged region in one piece (see
+      // DrawHeaderCell / HeaderCellIsFiller). This removes the internal
+      // hairlines and lets the title text centre over the full height.
+      if not HeaderCellIsFiller(i, j+Element.ColSkip) then
+        DrawHeaderCell(Canvas, i, j+Element.ColSkip);
       j:=j+Element.ColSpan;
     end;
   end;
 end;
 
+
+function TMultiHeaderGrid.HeaderCellIsFiller(ALevel, ACol: Integer): Boolean;
+// A "filler" is an auto-generated, empty-caption group cell that sits
+// above a column whose grouping is shallower than the deepest group
+// path. Fillers exist only to keep every header row fully tiled (the
+// header model has no horizontal-gap support); visually they belong to
+// the title cell beneath them. The title row itself is never a filler.
+begin
+  if (ALevel<0) or (ALevel>=FHeaderLevels.Count-1) then Exit(False);
+  var Element:=FHeaderLevels.GetElementAtCell(ACol,ALevel);
+  Result:=Assigned(Element) and (Element.Caption='') and (Element.ColSpan=1) and
+          (FHeaderLevels.IndexOf(Element.FLevel)=ALevel);
+end;
+
+function TMultiHeaderGrid.HeaderMergedRect(ALevel, ACol: Integer): TRectF;
+// Rect of the header cell at (ALevel,ACol), extended upward to swallow
+// any stack of blank fillers directly above it, so a short column's
+// title is drawn (and its text centred) over the full combined height.
+begin
+  Result:=GetHeaderRect(ALevel, ACol);
+  var L:=ALevel-1;
+  while (L>=0) and HeaderCellIsFiller(L, ACol) do begin
+    var R:=GetHeaderRect(L, ACol);
+    if R.Top<Result.Top then Result.Top:=R.Top;
+    Dec(L);
+  end;
+end;
 
 procedure TMultiHeaderGrid.DrawHeaderCell(Canvas: TCanvas; ALevel, ACol: Integer);
 var
@@ -1454,7 +1844,17 @@ begin
   Element:=FHeaderLevels.GetElementAtCell(ACol,ALevel);
   if not Assigned(Element) then Exit;
 
-  var ARect:=GetHeaderRect(ALevel, ACol);
+  // Fillers are never drawn on their own - the title beneath the stack
+  // paints the whole region (see DrawHeaders). If asked directly, no-op.
+  if HeaderCellIsFiller(ALevel, ACol) then Exit;
+
+  // If this (non-filler) cell has blank fillers stacked above it, grow
+  // the rect upward to cover them so it renders as one merged cell.
+  var ARect: TRectF;
+  if (ALevel>0) and HeaderCellIsFiller(ALevel-1, ACol) then
+    ARect:=HeaderMergedRect(ALevel, ACol)
+  else
+    ARect:=GetHeaderRect(ALevel, ACol);
 
   // Background fill
   if Element.Style.CellColorIsSet then begin
@@ -1484,7 +1884,7 @@ begin
   end;
   var VAlignment:=TTextAlign.Center;
   if Element.Style.TextVAlignmentIsSet then begin
-    HAlignment:=Element.Style.TextVAlignment;
+    VAlignment:=Element.Style.TextVAlignment;
   end;
 
   if Element.Style.FontColorIsSet then begin
@@ -1496,9 +1896,13 @@ begin
   var TextRect:=ARect;
   TextRect.Inflate(-CellPadding.Left-FGridLineWidth/2,-CellPadding.Top-FGridLineWidth/2,
                    -CellPadding.Right-FGridLineWidth/2,-CellPadding.Bottom-FGridLineWidth/2);
-  Canvas.FillText(TextRect, Element.Caption, False, 1, [], HAlignment, VAlignment);
+  Canvas.FillText(TextRect, Element.Caption, HeaderCellWordWrap(Element), 1, [],
+                  HAlignment, VAlignment);
 
-  // Borders
+  // Borders (single rect around the whole merged region)
+  Canvas.Stroke.Kind:=TBrushKind.Solid;
+  Canvas.Stroke.Color:=FHeaderLineColor;
+  Canvas.Stroke.Thickness:=FGridLineWidth/2;
   Canvas.DrawRect(ARect, 0, 0, AllCorners, 1);
 end;
 
@@ -1892,8 +2296,202 @@ end;
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
   AutoSizeCols(ForcePrecise);
+  AutoSizeHeaders;
   AutoSizeRows(ForcePrecise);
   UpdateSize;
+end;
+
+procedure TMultiHeaderGrid.SetHeaderWordWrap(const Value: Boolean);
+begin
+  if FHeaderWordWrap<>Value then begin
+    FHeaderWordWrap:=Value;
+    Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetHeaderColumns(const Value: TMHGHeaderColumns);
+begin
+  FHeaderColumns.Assign(Value);
+end;
+
+procedure TMultiHeaderGrid.RebuildFromHeaderColumns;
+// Re-applies the HeaderColumns collection to the grid. When empty the
+// procedural header (Header.AddRow...) is left untouched.
+begin
+  if FRebuildingHeaderColumns then Exit;
+  if FHeaderColumns=nil then Exit;
+  if FHeaderColumns.Count=0 then Exit;
+
+  FRebuildingHeaderColumns:=True;
+  try
+    // Gather visible items in order.
+    var Vis: array of TMHGHeaderColumn;
+    SetLength(Vis,FHeaderColumns.Count);
+    var Cnt:=0;
+    for var i:=0 to FHeaderColumns.Count-1 do
+      if FHeaderColumns[i].Visible then begin
+        Vis[Cnt]:=FHeaderColumns[i];
+        Inc(Cnt);
+      end;
+    SetLength(Vis,Cnt);
+
+    BuildHeaderFromColumns(Vis);
+  finally
+    FRebuildingHeaderColumns:=False;
+  end;
+end;
+
+procedure TMultiHeaderGrid.BuildHeaderFromColumns(const ACols: array of TMHGHeaderColumn);
+// Builds a (possibly grouped, multi-row) header from a flat list of
+// header columns and applies their geometry / alignment / word wrap.
+// This is the shared grouping algorithm used by both the non-data-bound
+// grids (HeaderColumns) and, conceptually, the DB grid. Every group row
+// is fully tiled (one element per column position) so the header model's
+// left-to-right accumulation stays perfectly column-aligned.
+var
+  Paths: TArray<TArray<string>>;
+begin
+  var N:=Length(ACols);
+  if N=0 then Exit;
+
+  ColCount:=N;
+  Header.Clear;
+
+  SetLength(Paths,N);
+  var MaxDepth:=0;
+  for var i:=0 to N-1 do begin
+    Paths[i]:=ACols[i].GroupPath;
+    if Length(Paths[i])>MaxDepth then MaxDepth:=Length(Paths[i]);
+  end;
+
+  for var Level:=0 to MaxDepth-1 do begin
+    var Row:=Header.AddRow(30);
+    var Col:=0;
+    while Col<N do begin
+      if Length(Paths[Col])<=Level then begin
+        Row.AddColumn('',1);
+        Inc(Col);
+        Continue;
+      end;
+      var Span:=1;
+      while (Col+Span<N) and (Length(Paths[Col+Span])>Level) do begin
+        var Same:=True;
+        for var L:=0 to Level do
+          if Paths[Col+Span][L]<>Paths[Col][L] then begin Same:=False; Break; end;
+        if not Same then Break;
+        Inc(Span);
+      end;
+      Row.AddColumn(Paths[Col][Level],Span);
+      Inc(Col,Span);
+    end;
+  end;
+
+  // Title row.
+  var TitleRow:=Header.AddRow(30);
+  for var i:=0 to N-1 do begin
+    var El:=TitleRow.AddColumn(ACols[i].Title);
+    El.Style.TextHAlignment:=ACols[i].HeaderAlignment;
+    El.Style.TextHAlignmentIsSet:=True;
+    El.Style.TextVAlignment:=ACols[i].HeaderVertAlignment;
+    El.Style.TextVAlignmentIsSet:=True;
+  end;
+
+  // Apply per-column geometry/alignment/word wrap.
+  for var i:=0 to N-1 do begin
+    if ACols[i].Width>0 then ColWidths[i]:=ACols[i].Width;
+    if ACols[i].MinWidth>0 then ColMinWidth[i]:=ACols[i].MinWidth;
+    if ACols[i].MaxWidth>0 then ColMaxWidth[i]:=ACols[i].MaxWidth;
+    ColWordWrap[i]:=ACols[i].WordWrap;
+    ColTextHAlignment[i]:=ACols[i].Alignment;
+    ColTextVAlignment[i]:=ACols[i].VertAlignment;
+  end;
+
+  Invalidate;
+end;
+
+function TMultiHeaderGrid.HeaderCellWordWrap(AElement: THeaderElement): Boolean;
+// Per-element override (Style.WordWrap) wins; otherwise the grid default.
+begin
+  if not Assigned(AElement) then Exit(FHeaderWordWrap);
+  if AElement.Style.WordWrapIsSet then
+    Result:=AElement.Style.WordWrap
+  else
+    Result:=FHeaderWordWrap;
+end;
+
+function TMultiHeaderGrid.HeaderElementTextWidth(ALevel, ACol: Integer): Single;
+// Width available for an element's text: the merged rect (covering any
+// ColSpan and any blank-filler stack) minus horizontal padding.
+begin
+  var R:=HeaderMergedRect(ALevel, ACol);
+  Result:=R.Width-CellPadding.Left-CellPadding.Right-FGridLineWidth;
+  if Result<1 then Result:=1;
+end;
+
+procedure TMultiHeaderGrid.AutoSizeHeaders;
+// Sizes every header level's height to fit the tallest caption on that
+// level, honouring explicit #13#10 line breaks and (when enabled) word
+// wrapping against the element's current column width. RowSpan/filler
+// stacks are handled by distributing a tall caption's required height
+// across the levels it covers.
+var
+  i, j: Integer;
+begin
+  if FHeaderLevels.Count=0 then Exit;
+
+  Canvas.Font.Assign(FCellFont);
+  var BaseTH:=Canvas.TextHeight('A');
+  var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
+  var CellDelimterHeight:=FGridLineWidth;
+
+  // Pass 1: minimum height each level needs from its own single-row
+  // (RowSpan=1) elements. Start every level at one text line.
+  var LevelHeight: TArray<Single>;
+  SetLength(LevelHeight,FHeaderLevels.Count);
+  for i:=0 to FHeaderLevels.Count-1 do
+    LevelHeight[i]:=BaseTH+CellPaddingHeight+CellDelimterHeight/2;
+
+  for i:=0 to FHeaderLevels.Count-1 do begin
+    var Col:=0;
+    for j:=0 to FHeaderLevels[i].Count-1 do begin
+      var Element:=FHeaderLevels[i][j];
+      var DrawCol:=Col+Element.ColSkip;
+
+      Canvas.Font.Assign(FCellFont);
+      if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+      if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+      if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
+
+      var NeededText: Single;
+      if HeaderCellWordWrap(Element) and (Element.Caption<>'') then begin
+        var W:=HeaderElementTextWidth(i, DrawCol);
+        var MeasureRect:=TRectF.Create(0,0,W,100000);
+        Canvas.MeasureText(MeasureRect,Element.Caption,True,[],
+                           TTextAlign.Leading,TTextAlign.Leading);
+        NeededText:=MeasureRect.Height;
+      end else begin
+        NeededText:=Max(CountLines(Element.Caption),1)*Canvas.TextHeight('A');
+      end;
+
+      var Needed:=NeededText+CellPaddingHeight+CellDelimterHeight/2;
+
+      // Distribute the requirement across the RowSpan the element covers.
+      // For RowSpan=1 (the common case, incl. fillers' stack handled via
+      // the merged rect) this just bumps the element's own level.
+      var Span:=Element.RowSpan;
+      if Span<1 then Span:=1;
+      var Share:=Needed/Span;
+      for var L:=i to Min(i+Span-1,FHeaderLevels.Count-1) do
+        LevelHeight[L]:=Max(LevelHeight[L],Share);
+
+      Col:=Col+Element.ColSpan;
+    end;
+  end;
+
+  for i:=0 to FHeaderLevels.Count-1 do
+    FHeaderLevels[i].Height:=Trunc(LevelHeight[i]);
+
+  Invalidate;
 end;
 
 function CountLines(const Text: string): Integer;
@@ -2012,8 +2610,6 @@ begin
       var Element:=FHeaderLevels.GetElementAtCell(i,j);
       if not Assigned(Element) then Continue;
 
-      var Lines:=Element.Caption.Split([#13#10]);
-
       Canvas.Font.Assign(FCellFont);
       if Element.Style.FontNameIsSet then begin
         Canvas.Font.Family:=Element.Style.FontName;
@@ -2025,8 +2621,21 @@ begin
         Canvas.Font.Style:=Element.Style.FontStyle;
       end;
 
-      for var Line in Lines do begin
-        MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
+      if HeaderCellWordWrap(Element) then begin
+        // Wrapping header: the column only needs to fit the widest single
+        // word; the rest wraps. Divide across the element's ColSpan.
+        var Words:=Element.Caption.Split([' ', ':', ';', ',', '.', '!', '?',
+                                          '-', '+', '*', '/', '\', '|', #9, #13, #10]);
+        var MaxWordWidth:=0.0;
+        for var Word in Words do
+          if Word<>'' then
+            MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+        MaxWidth:=Max(MaxWidth,MaxWordWidth/Element.FColSpan);
+      end else begin
+        var Lines:=Element.Caption.Split([#13#10]);
+        for var Line in Lines do begin
+          MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
+        end;
       end;
     end;
 
@@ -2378,8 +2987,17 @@ begin
           DoHeaderClick(i, j);
           Exit;
         end;
-        var ColSpan:=FHeaderLevels.GetElementAtCell(j,i).ColSpan;
+        // With grouped headers a header cell can be empty (no element
+        // covers it - e.g. the blank band above an ungrouped column),
+        // so GetElementAtCell may return nil. Advance one column then.
+        var Element:=FHeaderLevels.GetElementAtCell(j,i);
+        if Element=nil then begin
+          Inc(j);
+          Continue;
+        end;
+        var ColSpan:=Element.ColSpan;
         if ColSpan<0 then ColSpan:=FColCount;
+        if ColSpan<1 then ColSpan:=1; // never advance by 0 -> no infinite loop
         j:=j+ColSpan;
       end;
     end;
@@ -3215,6 +3833,14 @@ begin
       for i:=0 to FHeaderLevels.Count-1 do begin
         Col:=0;
         for j:=0 to FHeaderLevels[i].Count-1 do begin
+          // The bottom edge of a blank filler is an internal, visually
+          // suppressed border of a merged title stack - don't expose a
+          // row-resize handle there.
+          if HeaderCellIsFiller(i, Col+FHeaderLevels[i][j].ColSkip) then begin
+            Col:=Col+FHeaderLevels[i][j].ColSpan;
+            Continue;
+          end;
+
           CellRect:=GetHeaderRect(i, Col);
 
           ResizeRect:=TRectF.Create(
@@ -3537,6 +4163,136 @@ begin
   InvalidateRect(LocalRect);
 end;
 
+{ TMHGColumn }
+
+constructor TMHGColumn.Create(Collection: TCollection);
+begin
+  inherited; // base initialises widths, alignments, separator, etc.
+  FColor:=TAlphaColorRec.White;
+  FColorIsSet:=False;
+end;
+
+procedure TMHGColumn.Assign(Source: TPersistent);
+begin
+  inherited; // copies all shared header-column fields and calls Changed
+  if Source is TMHGColumn then begin
+    var C:=TMHGColumn(Source);
+    FFieldName:=C.FFieldName;
+    FColor:=C.FColor;
+    FColorIsSet:=C.FColorIsSet;
+    Changed;
+  end;
+end;
+
+function TMHGColumn.GetGrid: TMultiHeaderDBGrid;
+begin
+  if Collection is TMHGColumns then
+    Result:=TMHGColumns(Collection).Grid
+  else
+    Result:=nil;
+end;
+
+function TMHGColumn.GetDisplayName: string;
+begin
+  if Title<>'' then
+    Result:=Title
+  else if FFieldName<>'' then
+    Result:=FFieldName
+  else
+    Result:=inherited GetDisplayName;
+end;
+
+function TMHGColumn.IsColorStored: Boolean;
+begin
+  Result:=FColorIsSet;
+end;
+
+procedure TMHGColumn.SetFieldName(const Value: string);
+begin
+  if FFieldName<>Value then begin
+    FFieldName:=Value;
+    Changed;
+  end;
+end;
+
+procedure TMHGColumn.SetColor(const Value: TAlphaColor);
+begin
+  if (FColor<>Value) or (not FColorIsSet) then begin
+    FColor:=Value;
+    FColorIsSet:=True;
+    Changed;
+  end;
+end;
+
+{ TMHGColumns }
+
+constructor TMHGColumns.Create(AGrid: TMultiHeaderDBGrid);
+begin
+  inherited Create(AGrid, TMHGColumn);
+  FGrid:=AGrid;
+end;
+
+function TMHGColumns.GetItem(Index: Integer): TMHGColumn;
+begin
+  Result:=TMHGColumn(inherited Items[Index]);
+end;
+
+procedure TMHGColumns.SetItem(Index: Integer; const Value: TMHGColumn);
+begin
+  inherited Items[Index]:=Value;
+end;
+
+procedure TMHGColumns.Update(Item: TCollectionItem);
+begin
+  inherited;
+  // Any add/remove/reorder/property change rebuilds the grid header.
+  if FGrid<>nil then
+    FGrid.ResetTable;
+end;
+
+function TMHGColumns.Add: TMHGColumn;
+begin
+  Result:=TMHGColumn(inherited Add);
+end;
+
+function TMHGColumns.AddColumn(const AFieldName: string;
+                               const ATitle: string = '';
+                               const AGroupHeader: string = ''): TMHGColumn;
+begin
+  BeginUpdate;
+  try
+    Result:=Add;
+    Result.FieldName:=AFieldName;
+    Result.Title:=ATitle;
+    Result.GroupHeader:=AGroupHeader;
+  finally
+    EndUpdate;
+  end;
+end;
+
+function TMHGColumns.FindByFieldName(const AFieldName: string): TMHGColumn;
+begin
+  for var i:=0 to Count-1 do begin
+    if SameText(Items[i].FieldName,AFieldName) then Exit(Items[i]);
+  end;
+  Result:=nil;
+end;
+
+function TMHGColumns.SetColumnProps(const AFieldName: string;
+                                    const ATitle: string;
+                                    const AGroupHeader: string = '';
+                                    AWidth: Integer = -1;
+                                    AAlignment: TTextAlign = TTextAlign.Leading;
+                                    AMinWidth: Integer = -1;
+                                    AMaxWidth: Integer = -1): TMHGColumn;
+begin
+  Result:=FindByFieldName(AFieldName);
+  if not Assigned(Result) then begin
+    Result:=AddColumn(AFieldName);
+  end;
+  Result.SetProps(ATitle,AGroupHeader,AWidth,AAlignment,AMinWidth,AMaxWidth);
+end;
+
 { TMHGDataLink }
 
 constructor TMHGDataLink.Create(AGrid: TMultiHeaderDBGrid);
@@ -3549,7 +4305,15 @@ end;
 
 procedure TMHGDataLink.ActiveChanged;
 begin
-  if FGrid<>nil then FGrid.ResetTable;
+  if FGrid=nil then Exit;
+  // When a DataSet/DataSource is assigned and opened and the grid has no
+  // predefined Columns, populate the collection from the field list so
+  // the basic columns exist (and are editable). AutoCreateColumns itself
+  // rebuilds the header; otherwise rebuild here.
+  if Active and (FGrid.Columns.Count=0) and (FGrid.AutoCreateColumnsOnOpen) then
+    FGrid.AutoCreateColumns
+  else
+    FGrid.ResetTable;
 end;
 
 procedure TMHGDataLink.LayoutChanged;
@@ -3620,20 +4384,47 @@ begin
   inherited;
 
   FRowCacheSize:=1000;
+  FAutoCreateColumnsOnOpen:=True;
   FCellTexts:=TRowsData.Create(FRowCacheSize);
   FDataLink:=TMHGDataLink.Create(Self);
+  FColumns:=TMHGColumns.Create(Self);
 end;
 
 destructor TMultiHeaderDBGrid.Destroy;
 begin
   FDataLink.Free;
   FCellTexts.Free;
+  FColumns.Free;
 
   inherited;
 end;
 
 procedure TMultiHeaderDBGrid.DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle);
 begin
+  // Per-column default appearance from the Columns collection
+  // (applies to the data cells, beneath any per-row overrides).
+  // FColMap maps the effective column index to its collection item and
+  // is refreshed by ResetTable, so this stays O(1) per cell.
+  if (ACol>=0) and (ACol<Length(FColMap)) then begin
+    var Col:=FColMap[ACol];
+    if Col<>nil then begin
+      if Col.ColorIsSet and (not Style.CellColorIsSet) then
+        Style.CellColor:=Col.Color;
+      // Surface the column's word-wrap so per-cell style consumers
+      // (drawing, autosize) wrap consistently. Horizontal alignment is
+      // applied through ColTextHAlignment in ResetTable.
+      if Col.WordWrap and (not Style.WordWrapIsSet) then begin
+        Style.WordWrap:=True;
+        Style.WordWrapIsSet:=True;
+      end;
+      // Vertical alignment: column default, overridable per cell.
+      if not Style.TextVAlignmentIsSet then begin
+        Style.TextVAlignment:=Col.VertAlignment;
+        Style.TextVAlignmentIsSet:=True;
+      end;
+    end;
+  end;
+
   // Don't create a cache entry just to check the style -
   // it's enough to see whether the row is already cached.
   if (ARow>=0) and (ACol>=0) then begin
@@ -3763,20 +4554,58 @@ begin
   Result:=FDataLink.DataSource;
 end;
 
-function TMultiHeaderDBGrid.GetVisibleFields: TArray<TField>;
+procedure TMultiHeaderDBGrid.SetColumns(const Value: TMHGColumns);
 begin
-  var DS:=DataSet;
-  if DS=nil then Exit(nil);
+  FColumns.Assign(Value);
+end;
 
-  SetLength(Result,DS.FieldCount);
-  var Cnt:=0;
-  for var i:=0 to DS.FieldCount-1 do begin
-    if DS.Fields[i].Visible then begin
-      Result[Cnt]:=DS.Fields[i];
-      Inc(Cnt);
+function TMultiHeaderDBGrid.ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
+// Produces the ordered list of effective columns and the matching
+// fields. When the Columns collection is populated it drives the
+// layout (column order, titles, grouping); otherwise the DataSet's
+// visible fields are used as before.
+begin
+  AFields:=nil;
+  Result:=nil;
+
+  var DS:=DataSet;
+  if DS=nil then Exit;
+
+  if FColumns.Count=0 then begin
+    // Auto mode - one column per visible field, no Columns objects.
+    SetLength(AFields,DS.FieldCount);
+    var Cnt:=0;
+    for var i:=0 to DS.FieldCount-1 do begin
+      if DS.Fields[i].Visible then begin
+        AFields[Cnt]:=DS.Fields[i];
+        Inc(Cnt);
+      end;
     end;
+    SetLength(AFields,Cnt);
+    Exit;
+  end;
+
+  // Columns-driven mode. Skip invisible columns and columns whose
+  // FieldName does not resolve to a real field.
+  SetLength(Result,FColumns.Count);
+  SetLength(AFields,FColumns.Count);
+  var Cnt:=0;
+  for var i:=0 to FColumns.Count-1 do begin
+    var Col:=FColumns[i];
+    if not Col.Visible then Continue;
+    var F:=DS.FindField(Col.FieldName);
+    if F=nil then Continue;
+    Result[Cnt]:=Col;
+    AFields[Cnt]:=F;
+    Inc(Cnt);
   end;
   SetLength(Result,Cnt);
+  SetLength(AFields,Cnt);
+end;
+
+function TMultiHeaderDBGrid.GetVisibleFields: TArray<TField>;
+begin
+  ResolveColumns(Result);
 end;
 
 function TMultiHeaderDBGrid.GetRowData(ARow: Integer): TDBRowData;
@@ -3828,28 +4657,168 @@ end;
 
 procedure TMultiHeaderDBGrid.ResetTable;
 begin
-  FCellTexts.Clear;
+  // Guard against re-entrancy: building the header changes ColCount/
+  // column widths, none of which should trigger another rebuild.
+  if FRebuildingHeader then Exit;
+  FRebuildingHeader:=True;
+  try
+    FCellTexts.Clear;
 
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then begin
-    ColCount:=5;
-    RowCount:=1;
-    Header.Clear;
-    Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
-    Exit;
+    var DS:=DataSet;
+    if (DS=nil) or (not DS.Active) then begin
+      FColMap:=nil;
+      ColCount:=5;
+      RowCount:=1;
+      Header.Clear;
+      Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+      Exit;
+    end;
+
+    var Fields: TArray<TField>;
+    var Cols:=ResolveColumns(Fields);
+    FColMap:=Cols; // cache for O(1) per-cell colour lookup in DoGetCellStyle
+
+    ColCount:=Length(Fields);
+    if ColCount=0 then begin
+      FColMap:=nil;
+      Header.Clear;
+      Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+      UpdateRowCount;
+      Exit;
+    end;
+
+    BuildGroupedHeader(Fields, Cols);
+
+    // Apply per-column geometry/alignment taken from the Columns
+    // collection. Column *data-cell* colour is handled separately in
+    // DoGetCellStyle via FColMap, so it is intentionally not set here.
+    if Length(Cols)=ColCount then begin
+      for var i:=0 to ColCount-1 do begin
+        var Col:=Cols[i];
+        if Col=nil then Continue;
+        if Col.Width>0 then ColWidths[i]:=Col.Width;
+        if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
+        if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
+        ColWordWrap[i]:=Col.WordWrap;
+        ColTextHAlignment[i]:=Col.Alignment;
+        ColTextVAlignment[i]:=Col.VertAlignment;
+      end;
+    end;
+
+    UpdateRowCount;
+  finally
+    FRebuildingHeader:=False;
   end;
+end;
 
-  var Fields:=GetVisibleFields;
-
-  ColCount:=Length(Fields);
-
+procedure TMultiHeaderDBGrid.BuildGroupedHeader(const AFields: TArray<TField>;
+                                                const ACols: TArray<TMHGColumn>);
+// Generates the stacked group-header rows (UniGUI-style) plus the
+// final title row from the Columns collection. In auto mode (no
+// Columns objects) it degenerates into a single title row built from
+// the fields' DisplayLabels, preserving the original look.
+//
+// AFields and ACols are the already-resolved (visible, field-matched)
+// parallel arrays produced by ResolveColumns. ACols may be empty (auto
+// mode) or exactly the same length as AFields.
+var
+  Paths: TArray<TArray<string>>;
+begin
   Header.Clear;
-  var Row:=Header.AddRow;
-  for var F in Fields do begin
-    Row.AddColumn(F.DisplayLabel);
+
+  var N:=Length(AFields);
+  if N=0 then Exit;
+
+  var ColObjs: TArray<TMHGColumn> := ACols;
+  if Length(ColObjs)<>N then ColObjs:=nil;
+
+  // Collect the group path of each column and the deepest path length.
+  SetLength(Paths,N);
+  var MaxDepth:=0;
+  for var i:=0 to N-1 do begin
+    if ColObjs<>nil then
+      Paths[i]:=ColObjs[i].GroupPath
+    else
+      Paths[i]:=nil;
+    if Length(Paths[i])>MaxDepth then MaxDepth:=Length(Paths[i]);
   end;
 
-  UpdateRowCount;
+  // One header level per group depth, drawn top (level 0) to bottom.
+  //
+  // The underlying header model positions a row's elements purely by
+  // accumulating ColSpan left-to-right (plus a ColSkip that only
+  // accounts for RowSpans coming from rows *above*). It has no concept
+  // of a horizontal gap inside a row. So every group row is *fully
+  // tiled*: each column position gets exactly one element - either a
+  // merged group caption spanning its run of same-path columns, or a
+  // blank 1-wide filler where a column has no caption at this level.
+  // This keeps every row perfectly column-aligned regardless of how
+  // groups, ungrouped columns and differing depths are interleaved.
+  for var Level:=0 to MaxDepth-1 do begin
+    var Row:=Header.AddRow(30);
+    var Col:=0;
+    while Col<N do begin
+      // No group caption for this column at this level -> blank filler.
+      if Length(Paths[Col])<=Level then begin
+        Row.AddColumn('',1);
+        Inc(Col);
+        Continue;
+      end;
+
+      // Merge consecutive columns that share the same path prefix
+      // [0..Level] into a single spanning group cell.
+      var Span:=1;
+      while (Col+Span<N) and (Length(Paths[Col+Span])>Level) do begin
+        var Same:=True;
+        for var L:=0 to Level do begin
+          if Paths[Col+Span][L]<>Paths[Col][L] then begin
+            Same:=False;
+            Break;
+          end;
+        end;
+        if not Same then Break;
+        Inc(Span);
+      end;
+
+      Row.AddColumn(Paths[Col][Level],Span);
+      Inc(Col,Span);
+    end;
+  end;
+
+  // Final row: the column titles themselves. One element per column,
+  // so column index lines up with header element index (Column(i)
+  // continues to return the title element of column i).
+  var TitleRow:=Header.AddRow(30);
+  for var i:=0 to N-1 do begin
+    var Caption:=AFields[i].DisplayLabel;
+    if (ColObjs<>nil) and (ColObjs[i].Title<>'') then
+      Caption:=ColObjs[i].Title;
+    var El:=TitleRow.AddColumn(Caption);
+    if ColObjs<>nil then begin
+      El.Style.TextHAlignment:=ColObjs[i].HeaderAlignment;
+      El.Style.TextHAlignmentIsSet:=True;
+      El.Style.TextVAlignment:=ColObjs[i].HeaderVertAlignment;
+      El.Style.TextVAlignmentIsSet:=True;
+    end;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.AutoCreateColumns;
+begin
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+
+  FColumns.BeginUpdate;
+  try
+    for var i:=0 to DS.FieldCount-1 do begin
+      var F:=DS.Fields[i];
+      if not F.Visible then Continue;
+      if FColumns.FindByFieldName(F.FieldName)=nil then
+        FColumns.AddColumn(F.FieldName,F.DisplayLabel);
+    end;
+  finally
+    FColumns.EndUpdate;
+  end;
 end;
 
 procedure TMultiHeaderDBGrid.UpdateRowCount;

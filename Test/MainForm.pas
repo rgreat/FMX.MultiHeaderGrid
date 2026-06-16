@@ -35,6 +35,7 @@ type
     Panel2: TPanel;
     ButtonAddRow: TButton;
     ButtonDeleteRow: TButton;
+    LimitWidthsCheckBox: TCheckBox;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
@@ -54,10 +55,12 @@ type
     procedure ButtonFillCellsClick(Sender: TObject);
     procedure GridDblClick(Sender: TObject);
     procedure WordWrapCheckBoxChange(Sender: TObject);
+    procedure LimitWidthsCheckBoxChange(Sender: TObject);
     procedure Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
       IsSelected: Boolean; const Text: string; var Handled: Boolean);
     procedure ButtonDeleteRowClick(Sender: TObject);
     procedure ButtonAddRowClick(Sender: TObject);
+    procedure TabControl1Change(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -65,6 +68,8 @@ type
     function ActiveGrid: TMultiHeaderGrid;
   public
     procedure InitGrid(Grid: TMultiHeaderGrid);
+    procedure InitDBGrid(Grid: TMultiHeaderDBGrid);
+    procedure ApplyGrid3WidthLimits;
     procedure InitGridHeader(Grid: TMultiHeaderGrid);
     procedure InitGridParams(Grid: TMultiHeaderGrid);
     procedure FillGrid(Grid: TMultiHeaderGrid);
@@ -87,11 +92,14 @@ uses
 
 procedure TForm1.FormCreate(Sender: TObject);
 begin
-  RowCountEdit.Text:='1000';
+  Grid1.RowCount:=1000;
+  Grid2.RowCount:=1000;
 
   InitGrid(Grid1);
   InitGrid(Grid2);
   InitGrid(Grid3);
+
+  TabControl1Change(nil);
 end;
 
 // ---------------------------------------------------------
@@ -101,53 +109,7 @@ end;
 procedure TForm1.InitGrid(Grid: TMultiHeaderGrid);
 begin
   if Grid is TMultiHeaderDBGrid then begin
-    CDS.LoadFromFile('..\..\example.xml');
-
-    var G:=TMultiHeaderDBGrid(Grid);
-    G.DataSource:=DS;
-
-    G.Header.First.Height:=70;
-    G.Column('id').Caption:='Internal'#13#10'identifier';
-    G.Column('klns').Caption:='Service'#13#10'class'#13#10'number';
-    G.Column('kldotpn').Caption:='Departure'#13#10'start'#13#10'date';
-    G.Column('kldotpk').Caption:='Departure'#13#10'end'#13#10'date';
-    G.Column('klkod').Caption:='Class'#13#10'character'#13#10'code';
-    G.Column('klnazv').Caption:='Service'#13#10'class'#13#10'name';
-    G.Column('klname').Caption:='Full name';
-    G.Column('kltip').Caption:='Car type';
-    G.Column('klabd').Caption:='Class code'#13#10'in UZ';
-    G.Column('klsob').Caption:='Carrier'#13#10'network'#13#10'code'#13#10'or 0';
-    G.Column('klntstp').Caption:='Conditional comfort'#13#10'level for'#13#10'class comparison';
-    G.Column('klfl05').Caption:='High'#13#10'comfort'#13#10'car'#13#10'flag';
-    G.Column('klpr05').Caption:='Linen'#13#10'on request'#13#10'flag';
-    G.Column('klpr06').Caption:='Business class'#13#10'flag';
-    G.Column('klf2f1').Caption:='"Mandatory'#13#10'4 seats'#13#10'per order"'#13#10'flag';
-    G.Column('klf2f2').Caption:='"Single'#13#10'passenger'#13#10'service"'#13#10'flag';
-    G.Column('klfl04').Caption:='"Mandatory 2 seats'#13#10'per order"'#13#10'flag';
-    G.Column('cor_tip').Caption:='Correction'#13#10'type';
-    G.Column('cor_time').Caption:='Update'#13#10'time';
-    var Row:=G.Header.AddRowOnTop;
-    var Cell:=Row.FillRow('Reference catalog of service classes for Express passenger train cars');
-    Cell.Style.CellColor:=TAlphaColors.Lightblue;
-
-    Grid.AutoSize;
-
-    for var i:=0 to G.DataSource.DataSet.FieldCount-1 do begin
-      if (G.DataSource.DataSet.Fields[i].DataType=ftWideString) and
-         (G.ColWidths[i]>150) then begin
-        G.ColTextHAlignment[i]:=TTextAlign.Leading;
-      end else begin
-        G.ColTextHAlignment[i]:=TTextAlign.Center;
-      end;
-
-      case G.DataSource.DataSet.Fields[i].DataType of
-        ftWideString: G.Column(i).Style.CellColor:=TAlphaColorRec.Cornsilk;
-        ftInteger: G.Column(i).Style.CellColor:=$FFB3FFFF;
-        ftBoolean: G.Column(i).Style.CellColor:=$FFFFF6C7;
-        ftTimeStamp: G.Column(i).Style.CellColor:=$FFE5FFCA;
-      end;
-    end;
-
+    InitDBGrid(TMultiHeaderDBGrid(Grid));
   end else begin
     InitGridParams(Grid);
     InitGridHeader(Grid);
@@ -155,7 +117,6 @@ begin
     MergeCellsinGrid(Grid);
     Grid.AutoSize;
   end;
-
 end;
 
 procedure TForm1.InitGridParams(Grid: TMultiHeaderGrid);
@@ -180,7 +141,6 @@ end;
 
 procedure TForm1.InitGridHeader(Grid: TMultiHeaderGrid);
 begin
-  // Настраиваем многоуровневые заголовки
   var Row:=Grid.Header.AddRow(30);
   var Cell:=Row.FillRow('Annual report');
   Cell.Style.FontSize:=14;
@@ -310,11 +270,85 @@ begin
 end;
 
 // ---------------------------------------------------------
+// --------------------- Init DBGrid -----------------------
+// ---------------------------------------------------------
+
+procedure TForm1.InitDBGrid(Grid: TMultiHeaderDBGrid);
+begin
+  var Columns:=Grid.Columns;
+
+  Columns.Clear;
+
+  Columns.SetColumnProps('id',       'Internal'#13#10'identifier');
+
+  Columns.SetColumnProps('klns',     'Service class number',  'Service class');
+  Columns.SetColumnProps('klkod',    'Character code',        'Service class');
+  Columns.SetColumnProps('klnazv',   'Name',                  'Service class');
+  Columns.SetColumnProps('klname',   'Full name',             'Service class');
+
+  Columns.SetColumnProps('kldotpn',  'Start',                 'Departure dates');
+  Columns.SetColumnProps('kldotpk',  'End',                   'Departure dates');
+
+  Columns.SetColumnProps('kltip',    'Car type');
+  Columns.SetColumnProps('klabd',    'Class code in UZ');
+  Columns.SetColumnProps('klsob',    'Carrier network code or 0');
+  Columns.SetColumnProps('klntstp',  'Conditional comfort level for class comparison', '');
+
+  Columns.SetColumnProps('klfl05',   'High comfort car',      'Flags;Comfort');
+  Columns.SetColumnProps('klpr05',   'Linen on request',      'Flags;Comfort');
+  Columns.SetColumnProps('klpr06',   'Business class',        'Flags;Comfort');
+  Columns.SetColumnProps('klf2f1',   'Mandatory 4 seats',     'Flags;Order rules');
+  Columns.SetColumnProps('klf2f2',   'Single passenger',      'Flags;Order rules');
+  Columns.SetColumnProps('klfl04',   'Mandatory 2 seats',     'Flags;Order rules');
+
+  Columns.SetColumnProps('cor_tip',  'Type',                  'Correction');
+  Columns.SetColumnProps('cor_time', 'Time',                  'Correction');
+
+  for var Column in Columns do begin
+    var HMGColumn:=TMHGColumn(Column);
+    var Field:=Grid.DataSet.FindField(HMGColumn.FieldName);
+    if Field=nil then Continue;
+
+    case Field.DataType of
+      ftWideString: HMGColumn.Color:=TAlphaColorRec.Cornsilk;
+      ftInteger:    HMGColumn.Color:=$FFB3FFFF;
+      ftBoolean:    HMGColumn.Color:=$FFFFF6C7;
+      ftTimeStamp:  HMGColumn.Color:=$FFE5FFCA;
+    end;
+
+    if (Field.DataType=ftWideString) and (Field.Size>10) then begin
+      HMGColumn.Alignment:=TTextAlign.Leading
+    end else begin
+      HMGColumn.Alignment:=TTextAlign.Center;
+    end;
+  end;
+
+  ApplyGrid3WidthLimits;
+  Grid.AutoSize;
+end;
+
+procedure TForm1.ApplyGrid3WidthLimits;
+const
+  Cols : array[0..3] of string  = ('klns', 'klkod', 'klnazv', 'klname');
+  MinW : array[0..3] of Integer = (    50,      50,       50,      100);
+  MaxW : array[0..3] of Integer = (   150,     150,      150,      400);
+begin
+  for var i:=0 to High(Cols) do begin
+    var Column:=Grid3.Columns.FindByFieldName(Cols[i]);
+    if not Assigned(Column) then Continue;
+
+    Column.MinWidth:=IfThen(LimitWidthsCheckBox.IsChecked,MinW[i],0);
+    Column.MaxWidth:=IfThen(LimitWidthsCheckBox.IsChecked,MaxW[i],0);
+  end;
+end;
+
+// ---------------------------------------------------------
 // ------------------- Handle Controls ---------------------
 // ---------------------------------------------------------
 
 function TForm1.ActiveGrid: TMultiHeaderGrid;
 begin
+  Result:=nil;
   if TabControl1.ActiveTab=TabItem1 then begin
     Result:=Grid1;
   end;
@@ -328,8 +362,9 @@ end;
 
 procedure TForm1.RowCountEditChange(Sender: TObject);
 begin
-  Grid1.RowCount:=StrToIntDef(RowCountEdit.Text,Grid1.RowCount);
-  Grid2.RowCount:=StrToIntDef(RowCountEdit.Text,Grid2.RowCount);
+  var Grid:=ActiveGrid;
+
+  Grid.RowCount:=StrToIntDef(RowCountEdit.Text,Grid.RowCount);
 end;
 
 procedure TForm1.ButtonFillCellsClick(Sender: TObject);
@@ -390,14 +425,41 @@ end;
 
 procedure TForm1.RowSelectCheckBoxChange(Sender: TObject);
 begin
-  Grid1.RowSelect:=RowSelectCheckBox.IsChecked;
-  Grid2.RowSelect:=RowSelectCheckBox.IsChecked;
+  var Grid:=ActiveGrid;
+  Grid.RowSelect:=RowSelectCheckBox.IsChecked;
+end;
+
+procedure TForm1.TabControl1Change(Sender: TObject);
+begin
+  if TabControl1.ActiveTab=TabItem1 then begin
+    RowSelectCheckBox.IsChecked:=Grid1.RowSelect;
+    WordWrapCheckBox.IsChecked:=Grid1.WordWrap;
+    RowCountEdit.Text:=Grid1.RowCount.ToString;
+    RowCountEdit.Enabled:=True;
+  end;
+  if TabControl1.ActiveTab=TabItem2 then begin
+    RowSelectCheckBox.IsChecked:=Grid2.RowSelect;
+    WordWrapCheckBox.IsChecked:=Grid2.WordWrap;
+    RowCountEdit.Text:=Grid2.RowCount.ToString;
+    RowCountEdit.Enabled:=True;
+  end;
+  if TabControl1.ActiveTab=TabItem3 then begin
+    RowSelectCheckBox.IsChecked:=Grid3.RowSelect;
+    WordWrapCheckBox.IsChecked:=Grid3.WordWrap;
+    RowCountEdit.Text:=Grid3.RowCount.ToString;
+    RowCountEdit.Enabled:=False;
+  end;
 end;
 
 procedure TForm1.WordWrapCheckBoxChange(Sender: TObject);
 begin
-  Grid1.WordWrap:=WordWrapCheckBox.IsChecked;
-  Grid2.WordWrap:=WordWrapCheckBox.IsChecked;
+  var Grid:=ActiveGrid;
+  Grid.WordWrap:=WordWrapCheckBox.IsChecked;
+end;
+
+procedure TForm1.LimitWidthsCheckBoxChange(Sender: TObject);
+begin
+  ApplyGrid3WidthLimits;
 end;
 
 // ---------------------------------------------------------
@@ -413,8 +475,6 @@ end;
 procedure TForm1.GridDrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
                               IsSelected: boolean; const Text: string; var Handled: Boolean);
 begin
-  // Custom Draw Cell
-
   If Text='Custom Draw' then begin
     if IsSelected then begin
       Canvas.Fill.Color:=TAlphaColorRec.Lightblue;
@@ -481,12 +541,17 @@ begin
 end;
 
 procedure TForm1.Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
-  IsSelected: Boolean; const Text: string; var Handled: Boolean);
+                               IsSelected: Boolean; const Text: string; var Handled: Boolean);
+const
+  ImgSize = 16;
 begin
   var Grid:=TMultiHeaderDBGrid(Sender);
 
   if Grid.DataSet=nil then Exit;
-  if Grid.DataSet.Fields[ACol].DataType<>ftBoolean then Exit;
+  if (ACol<0) or (ACol>=Grid.Columns.Count) then Exit;
+
+  var F:=Grid.DataSet.FindField(Grid.Columns[ACol].FieldName);
+  if (F=nil) or (F.DataType<>ftBoolean) then Exit;
 
   if IsSelected then begin
     Canvas.Fill.Color:=TAlphaColorRec.Lightblue;
@@ -496,7 +561,11 @@ begin
     Canvas.FillRect(Rect,1);
   end;
 
-  IL1.Draw(Canvas,Rect,IfThen(Text='True',1,0));
+  var W:=Min(ImgSize,Rect.Width);
+  var H:=Min(ImgSize,Rect.Height);
+  var ImgRect:=TRectF.Create(0,0,W,H);
+  ImgRect.Offset(Rect.Left+(Rect.Width-W)/2, Rect.Top+(Rect.Height-H)/2);
+  IL1.Draw(Canvas,ImgRect,IfThen(Text='True',1,0));
 
   Handled:=True;
 end;
