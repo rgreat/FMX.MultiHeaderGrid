@@ -1,7 +1,5 @@
 program Test;
 
-
-
 uses
   System.StartUpCopy,
   FMX.Forms,

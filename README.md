@@ -5,15 +5,15 @@ Support headers, merged cells and styles.
 **TMultiHeaderGrid** - does not store cell texts or styles. Use events to populate.  
 **TMultiHeaderStringGrid** - stores cell texts and styles internally.
 
-![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/TMultiHeaderGrid.png)
+![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/Images/TMultiHeaderGrid.png)
 
 **TMultiHeaderDBGrid** - show grid from TDataSource (from TDataSet). 
 Read only.
  
-![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/TMultiHeaderDBGrid.png)
+![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/Images/TMultiHeaderDBGrid.png)
 
 **Design Time** 
 
-![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/DesignTime.png)
+![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/Images/DesignTime.png)
 
 Usage examples in Test folder.
