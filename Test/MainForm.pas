@@ -61,6 +61,7 @@ type
     procedure ButtonDeleteRowClick(Sender: TObject);
     procedure ButtonAddRowClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
+    procedure FormShow(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -92,14 +93,17 @@ uses
 
 procedure TForm1.FormCreate(Sender: TObject);
 begin
-  Grid1.RowCount:=1000;
-  Grid2.RowCount:=1000;
-
   InitGrid(Grid1);
   InitGrid(Grid2);
   InitGrid(Grid3);
 
   TabControl1Change(nil);
+end;
+
+procedure TForm1.FormShow(Sender: TObject);
+begin
+  Width:=Min(1480,Trunc(Screen.Width));
+  Left:=Max(Trunc(Screen.Width-Width) div 2,5)
 end;
 
 // ---------------------------------------------------------
@@ -112,7 +116,6 @@ begin
     InitDBGrid(TMultiHeaderDBGrid(Grid));
   end else begin
     InitGridParams(Grid);
-    InitGridHeader(Grid);
     FillGrid(Grid);
     MergeCellsinGrid(Grid);
     Grid.AutoSize;
@@ -122,8 +125,6 @@ end;
 procedure TForm1.InitGridParams(Grid: TMultiHeaderGrid);
 begin
   Grid.ColCount:=15;
-  RowCountEditChange(nil);
-
   Grid.ColMinWidth[0]:=50;
   Grid.ColMaxWidth[0]:=200;
 
@@ -137,10 +138,15 @@ begin
   Grid.HeaderFont.Style := [TFontStyle.fsBold];
   Grid.CellColorAlternate := TAlphaColors.Whitesmoke;
   Grid.GridLineColor := TAlphaColors.Gray;
+
+  InitGridHeader(Grid);
+
+  Grid.RowCount:=1000;
 end;
 
 procedure TForm1.InitGridHeader(Grid: TMultiHeaderGrid);
 begin
+  Grid.Header.Clear;
   var Row:=Grid.Header.AddRow(30);
   var Cell:=Row.FillRow('Annual report');
   Cell.Style.FontSize:=14;
@@ -325,6 +331,7 @@ begin
 
   ApplyGrid3WidthLimits;
   Grid.AutoSize;
+  Grid.WordWrap:=True;
 end;
 
 procedure TForm1.ApplyGrid3WidthLimits;
