@@ -36,6 +36,8 @@ type
     ButtonAddRow: TButton;
     ButtonDeleteRow: TButton;
     LimitWidthsCheckBox: TCheckBox;
+    LineWidthEdit: TEdit;
+    Label2: TLabel;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
@@ -62,6 +64,7 @@ type
     procedure ButtonAddRowClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
     procedure FormShow(Sender: TObject);
+    procedure LineWidthEditChange(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -127,6 +130,7 @@ end;
 procedure TForm1.InitGridParams(Grid: TMultiHeaderGrid);
 begin
   Grid.ColCount:=15;
+
   Grid.ColMinWidth[0]:=50;
   Grid.ColMaxWidth[0]:=200;
 
@@ -440,24 +444,19 @@ end;
 
 procedure TForm1.TabControl1Change(Sender: TObject);
 begin
-  if TabControl1.ActiveTab=TabItem1 then begin
-    RowSelectCheckBox.IsChecked:=Grid1.RowSelect;
-    WordWrapCheckBox.IsChecked:=Grid1.WordWrap;
-    RowCountEdit.Text:=Grid1.RowCount.ToString;
-    RowCountEdit.Enabled:=True;
-  end;
+  var Grid:=Grid1;
   if TabControl1.ActiveTab=TabItem2 then begin
-    RowSelectCheckBox.IsChecked:=Grid2.RowSelect;
-    WordWrapCheckBox.IsChecked:=Grid2.WordWrap;
-    RowCountEdit.Text:=Grid2.RowCount.ToString;
-    RowCountEdit.Enabled:=True;
+    Grid:=Grid2;
   end;
   if TabControl1.ActiveTab=TabItem3 then begin
-    RowSelectCheckBox.IsChecked:=Grid3.RowSelect;
-    WordWrapCheckBox.IsChecked:=Grid3.WordWrap;
-    RowCountEdit.Text:=Grid3.RowCount.ToString;
-    RowCountEdit.Enabled:=False;
+    Grid:=Grid3;
   end;
+
+  RowSelectCheckBox.IsChecked:=Grid.RowSelect;
+  WordWrapCheckBox.IsChecked:=Grid.WordWrap;
+  RowCountEdit.Text:=Grid.RowCount.ToString;
+  LineWidthEdit.Text:=Grid.GridLineWidth.ToString;
+  RowCountEdit.Enabled:=not (Grid is TMultiHeaderDBGrid);
 end;
 
 procedure TForm1.WordWrapCheckBoxChange(Sender: TObject);
@@ -469,6 +468,13 @@ end;
 procedure TForm1.LimitWidthsCheckBoxChange(Sender: TObject);
 begin
   ApplyGrid3WidthLimits;
+end;
+
+procedure TForm1.LineWidthEditChange(Sender: TObject);
+begin
+  var Grid:=ActiveGrid;
+
+  Grid.GridLineWidth:=StrToFloatDef(LineWidthEdit.Text,Grid.GridLineWidth);
 end;
 
 // ---------------------------------------------------------
@@ -484,7 +490,7 @@ end;
 procedure TForm1.GridDrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
                               IsSelected: boolean; const Text: string; var Handled: Boolean);
 begin
-  If Text='Custom Draw' then begin
+  If Pos('Custom Draw',Text)>0 then begin
     if IsSelected then begin
       Canvas.Fill.Color:=TAlphaColorRec.Lightblue;
       Canvas.FillRect(Rect,1);

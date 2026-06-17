@@ -363,6 +363,8 @@ type
       // Inplace cell editor (basic grids). A single reusable TMemo is moved
       // over the cell being edited.
       FEditor: TMemo;
+      FEditorBack: TRectangle;
+      FEditorHost: TLayout;
       FEditing: Boolean;
       FEditCol: Integer;
       FEditRow: Integer;
@@ -391,6 +393,9 @@ type
     procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
                             Shift: TShiftState);
     procedure EditorExit(Sender: TObject);
+    // Strips the TMemo's painted border/background so the inplace editor
+    // blends seamlessly into the cell.
+    procedure EditorApplyStyle(Sender: TObject);
     procedure SetReadOnly(const Value: Boolean);
     function  CanEditCell(ACol, ARow: Integer): Boolean; virtual;
     procedure SetRowCount(Value: Integer);
@@ -3604,9 +3609,30 @@ procedure TMultiHeaderGrid.EnsureEditor;
 begin
   if FEditor<>nil then Exit;
 
+  // A clipping host sized to the cell interior. Both the backing fill and the
+  // memo are parented here and clipped to it, so text/fill never bleed into
+  // neighbouring cells or fight the gridlines.
+  FEditorHost:=TLayout.Create(Self);
+  FEditorHost.Parent:=Self;
+  FEditorHost.Visible:=False;
+  FEditorHost.ClipChildren:=True;
+  FEditorHost.HitTest:=False;
+
+  // Opaque backing rectangle drawn behind the borderless editor so the
+  // underlying cell text never shows through.
+  FEditorBack:=TRectangle.Create(Self);
+  FEditorBack.Parent:=FEditorHost;
+  FEditorBack.Align:=TAlignLayout.Client;
+  FEditorBack.HitTest:=False;
+  FEditorBack.Stroke.Kind:=TBrushKind.None;
+  FEditorBack.Fill.Kind:=TBrushKind.Solid;
+  FEditorBack.Fill.Color:=TAlphaColors.White;
+  FEditorBack.XRadius:=0;
+  FEditorBack.YRadius:=0;
+
   FEditor:=TMemo.Create(Self);
-  FEditor.Parent:=Self;
-  FEditor.Visible:=False;
+  FEditor.Parent:=FEditorHost;
+  FEditor.Align:=TAlignLayout.Client;
   FEditor.WordWrap:=False;
   FEditor.AutoSelect:=False;
   FEditor.StyledSettings:=[];
@@ -3614,6 +3640,24 @@ begin
   FEditor.DisableMouseWheel:=True;
   FEditor.OnKeyDown:=EditorKeyDown;
   FEditor.OnExit:=EditorExit;
+  FEditor.OnApplyStyleLookup:=EditorApplyStyle;
+end;
+
+procedure TMultiHeaderGrid.EditorApplyStyle(Sender: TObject);
+var
+  Obj: TFmxObject;
+begin
+  // Hide the TMemo's styled background entirely (this is what paints the
+  // border). The opaque FEditorBack rectangle supplies the fill instead.
+  if FEditor=nil then Exit;
+
+  Obj:=FEditor.FindStyleResource('background');
+  if Obj is TControl then
+    TControl(Obj).Opacity:=0;
+
+  Obj:=FEditor.FindStyleResource('frame');
+  if Obj is TControl then
+    TControl(Obj).Visible:=False;
 end;
 
 procedure TMultiHeaderGrid.PositionEditor;
@@ -3640,8 +3684,6 @@ begin
   var Top:=HeaderHeight;
   if R.Top<Top then R.Top:=Top;
 
-  FEditor.SetBounds(R.Left, R.Top, R.Width, R.Height);
-
   // Match the cell font.
   FEditor.TextSettings.Font.Assign(FCellFont);
 
@@ -3649,8 +3691,15 @@ begin
   var Vis:=(R.Bottom>HeaderHeight) and (R.Top<Height) and
            (R.Right>0) and (R.Left<Width);
 
-  FEditor.Visible:=Vis;
-  if Vis then FEditor.BringToFront;
+  if FEditorHost<>nil then
+  begin
+    // Host fills the cell interior; backing + memo align Client and are
+    // clipped to it.
+    FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4,
+                          R.Width-FGridLineWidth/2, R.Height-FGridLineWidth/2);
+    FEditorHost.Visible:=Vis;
+    if Vis then FEditorHost.BringToFront;
+  end;
 end;
 
 procedure TMultiHeaderGrid.StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
@@ -3683,8 +3732,11 @@ begin
     FEditor.Text:=Cells[ACol,ARow];    // F2 / double-click edits existing text
 
   PositionEditor;
-  FEditor.Visible:=True;
-  FEditor.BringToFront;
+  if FEditorHost<>nil then
+  begin
+    FEditorHost.Visible:=True;
+    FEditorHost.BringToFront;
+  end;
   FEditor.SetFocus;
   // Caret to end.
   FEditor.GoToTextEnd;
@@ -3697,7 +3749,7 @@ begin
   var Col:=FEditCol;
   var Row:=FEditRow;
   var NewText:=FEditor.Text;
-  if FEditor<>nil then FEditor.Visible:=False;
+  if FEditorHost<>nil then FEditorHost.Visible:=False;
 
   if (Col>=0) and (Col<FColCount) and (Row>=0) and (Row<FRowCount) then
     if Cells[Col,Row]<>NewText then begin
@@ -3719,7 +3771,7 @@ procedure TMultiHeaderGrid.CancelEditing;
 begin
   if not FEditing then Exit;
   FEditing:=False;
-  if FEditor<>nil then FEditor.Visible:=False;
+  if FEditorHost<>nil then FEditorHost.Visible:=False;
   if CanFocus then SetFocus;
   Invalidate;
 end;
@@ -3730,19 +3782,48 @@ begin
   case Key of
     vkReturn:
       begin
-        // "Single line" = the cell's current text has no line breaks. In that
-        // case a plain Enter ends editing. Once the text spans multiple lines,
-        // plain Enter inserts a newline and Ctrl+Enter is needed to commit.
-        // Ctrl+Enter always commits; Shift+Enter always inserts a newline.
-        var IsMultiline:=FEditor.Lines.Count>1;
-        var WantCommit:=(ssCtrl in Shift) or
-                        ((not IsMultiline) and not (ssShift in Shift));
-        if WantCommit then begin
+        // Plain Enter commits and exits the editor. Enter with any modifier
+        // (Shift/Ctrl/Alt) inserts a line break instead.
+        var WantNewline:=(ssShift in Shift) or (ssCtrl in Shift) or (ssAlt in Shift);
+        if WantNewline then begin
+          // Modifier + Enter inserts a line break at the caret. SelText is
+          // read-only in FMX, so compute the absolute caret offset from
+          // CaretPosition (SelStart is unreliable right after focus / text
+          // changes and can collapse to 0, inserting at the start).
+          var Cp:=FEditor.CaretPosition;
+          var S:=FEditor.Text;
+
+          // Absolute char offset of the caret within S.
+          var Offset:=0;
+          for var Ln:=0 to Cp.Line-1 do
+            Offset:=Offset+FEditor.Lines[Ln].Length+Length(sLineBreak);
+          Offset:=Offset+Cp.Pos;
+          if Offset>S.Length then Offset:=S.Length;
+
+          // Replace any active selection, mirroring normal typing behaviour.
+          var L:=FEditor.SelLength;
+          if L>0 then begin
+            var SelP:=FEditor.SelStart;
+            if (SelP>=0) and (SelP<=S.Length) then begin
+              Delete(S, SelP+1, L);
+              Offset:=SelP;
+            end;
+          end;
+
+          Insert(sLineBreak, S, Offset+1);
+          FEditor.Text:=S;
+
+          // Restore caret just after the inserted break.
+          var NewPos:=Offset+Length(sLineBreak);
+          FEditor.SelStart:=NewPos;
+          FEditor.SelLength:=0;
+        end
+        else begin
+          // Plain Enter commits and exits the editor.
           CommitEditing;
-          Key:=0;
-          KeyChar:=#0;
         end;
-        // Otherwise let the memo insert the line break itself.
+        Key:=0;
+        KeyChar:=#0;
       end;
     vkEscape:
       begin
@@ -4399,13 +4480,28 @@ end;
 
 procedure TMultiHeaderGrid.DblClick;
 begin
-  if not FLastClickIsOnCell then Exit;
+  if not FLastClickIsOnCell then begin
+    inherited;
+    Exit;
+  end;
 
-  inherited;
+  inherited;  // fires user OnDblClick (may show a modal)
 
-  // Double-click enters inplace edit of the selected cell.
-  if CanEditCell(FSelectedCell.X,FSelectedCell.Y) then
-    StartCellEditing(FSelectedCell.X,FSelectedCell.Y,#0);
+  // Start editing only if a cell is editable. Defer it so it runs after the
+  // double-click sequence (and any modal dialog raised by a user OnDblClick
+  // handler) has fully settled - otherwise the modal steals focus from the
+  // freshly-focused editor and EditorExit commits/closes it immediately.
+  if CanEditCell(FSelectedCell.X,FSelectedCell.Y) then begin
+    var C:=FSelectedCell.X;
+    var R:=FSelectedCell.Y;
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        if (not FEditing) and CanEditCell(C,R) and
+           (C=FSelectedCell.X) and (R=FSelectedCell.Y) then
+          StartCellEditing(C,R,#0);
+      end);
+  end;
 end;
 
 function TMultiHeaderGrid.GetColTextHAlignment(Index: Integer): TTextAlign;
