@@ -4040,6 +4040,7 @@ begin
   FEditing:=False;
   var Ed:=ActiveEditorControl;
   if Ed<>nil then Ed.Visible:=False;
+  if FEditorHost<>nil then FEditorHost.Visible:=False;
   FActiveEditor:=nil;
   if CanFocus then SetFocus;
   Invalidate;
