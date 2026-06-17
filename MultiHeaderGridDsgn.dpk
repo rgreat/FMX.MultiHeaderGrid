@@ -40,7 +40,6 @@ package MultiHeaderGridDsgn;
 requires
   rtl,
   fmx,
-  dbrtl,
   designide,
   MultiHeaderGrid;
 

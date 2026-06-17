@@ -13,7 +13,8 @@ Support headers, merged cells and styles.
  
 ![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/TMultiHeaderDBGrid.png)
 
-**Design Time**
+**Design Time** 
+
 ![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/DesignTime.png)
 
 Usage examples in Test folder.

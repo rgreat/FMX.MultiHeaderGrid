@@ -746,7 +746,10 @@ type
       FRowCacheSize: integer;
       FUpdatingRow: Boolean; // guards against recursion when syncing Row <-> DataSet.RecNo
       FColumns: TMHGColumns;
-      FAutoCreateColumnsOnOpen: Boolean;
+      // Signature of the DataSet/table we last auto-created columns for, so
+      // we only auto-create on a genuinely new source or a newly opened table
+      // (different field set), not on every re-open of the same one.
+      FLastAutoSig: string;
       FRebuildingHeader: Boolean; // guards ResetTable re-entrancy from column changes
       // Effective column-index -> collection item, rebuilt by ResetTable.
       // Lets DoGetCellStyle read a column's Color in O(1) per cell.
@@ -763,9 +766,17 @@ type
     // Builds the multi-row grouped header from the Columns collection.
     procedure BuildGroupedHeader(const AFields: TArray<TField>;
                                  const ACols: TArray<TMHGColumn>);
-    // Resolves the effective field list, honouring the Columns collection
-    // when populated and falling back to the DataSet's visible fields.
+    // Resolves the effective field list strictly from the Columns
+    // collection (no fallback): an empty collection yields no columns.
     function ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
+    // A string that identifies the currently open dataset/table: the DataSet
+    // instance plus its field-name list. Changes when a different DataSet is
+    // assigned OR the same DataSet opens a different set of fields.
+    function DatasetSignature: string;
+    // Called when the dataset becomes active. Auto-creates columns only when
+    // the grid has none AND this is a genuinely new source/table (a signature
+    // we have not auto-created for before), then rebuilds.
+    procedure HandleActiveChanged;
   protected
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
     procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
@@ -807,13 +818,11 @@ type
   published
     property DataSource: TDataSource read GetDataSource write SetDataSource;
     property RowCacheSize: integer read FRowCacheSize write SetRowCacheSize default 1000;
-    // When True (default) and no Columns are defined, opening the
-    // DataSet/DataSource auto-creates one column per visible field.
-    property AutoCreateColumnsOnOpen: Boolean read FAutoCreateColumnsOnOpen
-                                               write FAutoCreateColumnsOnOpen default True;
-    // Declarative column definitions. When empty the grid falls back to
-    // building a single-row header from the DataSet's visible fields
-    // (preserving the original behaviour).
+    // Declarative column definitions. The collection is authoritative:
+    // the grid shows exactly these columns, in this order. An empty
+    // collection means an empty grid - use AutoCreateColumns (or the
+    // design-time editor's Import button) to (re)populate it from the
+    // DataSet's visible fields.
     property Columns: TMHGColumns read FColumns write SetColumns;
   end;
 
@@ -4306,14 +4315,7 @@ end;
 procedure TMHGDataLink.ActiveChanged;
 begin
   if FGrid=nil then Exit;
-  // When a DataSet/DataSource is assigned and opened and the grid has no
-  // predefined Columns, populate the collection from the field list so
-  // the basic columns exist (and are editable). AutoCreateColumns itself
-  // rebuilds the header; otherwise rebuild here.
-  if Active and (FGrid.Columns.Count=0) and (FGrid.AutoCreateColumnsOnOpen) then
-    FGrid.AutoCreateColumns
-  else
-    FGrid.ResetTable;
+  FGrid.HandleActiveChanged;
 end;
 
 procedure TMHGDataLink.LayoutChanged;
@@ -4384,7 +4386,6 @@ begin
   inherited;
 
   FRowCacheSize:=1000;
-  FAutoCreateColumnsOnOpen:=True;
   FCellTexts:=TRowsData.Create(FRowCacheSize);
   FDataLink:=TMHGDataLink.Create(Self);
   FColumns:=TMHGColumns.Create(Self);
@@ -4560,10 +4561,11 @@ begin
 end;
 
 function TMultiHeaderDBGrid.ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
-// Produces the ordered list of effective columns and the matching
-// fields. When the Columns collection is populated it drives the
-// layout (column order, titles, grouping); otherwise the DataSet's
-// visible fields are used as before.
+// Produces the ordered list of effective columns and the matching fields.
+// The Columns collection is authoritative: it always drives the layout
+// (column order, titles, grouping). An empty Columns collection means an
+// empty grid - use AutoCreateColumns / the editor's Import to (re)populate
+// from the DataSet's visible fields.
 begin
   AFields:=nil;
   Result:=nil;
@@ -4571,21 +4573,7 @@ begin
   var DS:=DataSet;
   if DS=nil then Exit;
 
-  if FColumns.Count=0 then begin
-    // Auto mode - one column per visible field, no Columns objects.
-    SetLength(AFields,DS.FieldCount);
-    var Cnt:=0;
-    for var i:=0 to DS.FieldCount-1 do begin
-      if DS.Fields[i].Visible then begin
-        AFields[Cnt]:=DS.Fields[i];
-        Inc(Cnt);
-      end;
-    end;
-    SetLength(AFields,Cnt);
-    Exit;
-  end;
-
-  // Columns-driven mode. Skip invisible columns and columns whose
+  // Columns-driven, always. Skip invisible columns and columns whose
   // FieldName does not resolve to a real field.
   SetLength(Result,FColumns.Count);
   SetLength(AFields,FColumns.Count);
@@ -4714,13 +4702,10 @@ end;
 procedure TMultiHeaderDBGrid.BuildGroupedHeader(const AFields: TArray<TField>;
                                                 const ACols: TArray<TMHGColumn>);
 // Generates the stacked group-header rows (UniGUI-style) plus the
-// final title row from the Columns collection. In auto mode (no
-// Columns objects) it degenerates into a single title row built from
-// the fields' DisplayLabels, preserving the original look.
+// final title row from the Columns collection.
 //
 // AFields and ACols are the already-resolved (visible, field-matched)
-// parallel arrays produced by ResolveColumns. ACols may be empty (auto
-// mode) or exactly the same length as AFields.
+// parallel arrays produced by ResolveColumns, of equal length.
 var
   Paths: TArray<TArray<string>>;
 begin
@@ -4800,6 +4785,55 @@ begin
       El.Style.TextVAlignment:=ColObjs[i].HeaderVertAlignment;
       El.Style.TextVAlignmentIsSet:=True;
     end;
+  end;
+end;
+
+function TMultiHeaderDBGrid.DatasetSignature: string;
+begin
+  Result:='';
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+
+  // DataSet instance identity (so a different DataSet object always differs)
+  // plus the ordered field-name list (so the same DataSet reopened against a
+  // different table/query - hence a different field set - also differs, while
+  // a plain close/reopen of the same table yields the same signature).
+  var SB:=TStringBuilder.Create;
+  try
+    SB.Append(IntToHex(NativeUInt(DS),SizeOf(Pointer)*2));
+    SB.Append('|');
+    for var i:=0 to DS.FieldCount-1 do begin
+      SB.Append(DS.Fields[i].FieldName);
+      SB.Append(';');
+    end;
+    Result:=SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.HandleActiveChanged;
+begin
+  if not ((DataSet<>nil) and DataSet.Active) then begin
+    // Closed: keep current columns; just rebuild (shows placeholder if empty).
+    ResetTable;
+    Exit;
+  end;
+
+  var Sig:=DatasetSignature;
+  // Auto-create columns only when there are none AND this is a source/table we
+  // have not auto-created for yet. This fills a fresh grid or a newly opened
+  // table, but never resurrects columns the user deleted on the same table.
+  if (FColumns.Count=0) and (Sig<>FLastAutoSig) then begin
+    FLastAutoSig:=Sig;
+    AutoCreateColumns; // rebuilds via the collection's Update -> ResetTable
+    // If the table genuinely had no visible fields, AutoCreateColumns adds
+    // nothing and no rebuild is triggered; ensure the grid is still reset.
+    if FColumns.Count=0 then ResetTable;
+  end else begin
+    // Remember the current table so a later delete-all on it stays empty.
+    FLastAutoSig:=Sig;
+    ResetTable;
   end;
 end;
 
@@ -4898,7 +4932,10 @@ procedure TMultiHeaderDBGrid.SetDataSource(const Value: TDataSource);
 begin
   if FDataLink.DataSource<>Value then begin
     FDataLink.DataSource:=Value;
-    ResetTable;
+    // Treat the assignment like an active-state change: if the new source's
+    // DataSet is already open, this auto-creates columns for it (when empty)
+    // via the same new-source/table check used by ActiveChanged.
+    HandleActiveChanged;
   end;
 end;
 
