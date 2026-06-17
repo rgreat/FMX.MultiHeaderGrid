@@ -298,8 +298,8 @@ begin
   Columns.SetColumnProps('klnazv',   'Name',                  'Service class');
   Columns.SetColumnProps('klname',   'Full name',             'Service class');
 
-  Columns.SetColumnProps('kldotpn',  'Start',                 'Valid dates');
-  Columns.SetColumnProps('kldotpk',  'End',                   'Valid dates');
+  Columns.SetColumnProps('kldotpn',  'Start',                 'Valid dates').DateTimeEditor:=dteDate;
+  Columns.SetColumnProps('kldotpk',  'End',                   'Valid dates').DateTimeEditor:=dteDate;
 
   Columns.SetColumnProps('kltip',    'Car type');
   Columns.SetColumnProps('klabd',    'Class code in UZ');

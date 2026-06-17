@@ -5,12 +5,33 @@ interface
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
-  FMX.Memo, FMX.ScrollBox, Data.DB;
+  FMX.Memo, FMX.ScrollBox, FMX.ListBox, FMX.DateTimeCtrls, Data.DB;
 
 type
 
   THeaderLevel = class;
   THeaderLevels = class;
+
+  // Kind of inplace editor the DB grid uses for a column, selected from the
+  // bound field's DataType / FieldKind. See TMultiHeaderDBGrid.EditorKindForField.
+  TMHGEditorKind = (
+    ekNone,      // not editable (binary/structured/calculated/read-only)
+    ekMemo,      // TMemo - text + numeric, value round-trips via Field.AsString
+    ekCheckBox,  // TCheckBox - ftBoolean
+    ekComboBox,  // TComboBox - lookup fields (fkLookup)
+    ekDate,      // TDateEdit - ftDate
+    ekTime,      // TTimeEdit - ftTime
+    ekDateTime   // TDateEdit + TTimeEdit composite - ftDateTime/ftTimeStamp
+  );
+
+  // Per-column choice of how a datetime-typed field is edited. Lets the
+  // column author override the default (composite date+time) editor.
+  //   dteDateTime : date + time composite (default for datetime fields)
+  //   dteDate     : date only (time component left untouched on commit)
+  TMHGDateTimeEditKind = (
+    dteDateTime,
+    dteDate
+  );
 
   TCellStyle = record
   strict private
@@ -365,6 +386,10 @@ type
       FEditor: TMemo;
       FEditorBack: TRectangle;
       FEditorHost: TLayout;
+      // Currently active inplace editor control. For the base/string grids
+      // this is always FEditor (the TMemo). The DB grid may swap in a typed
+      // control (TCheckBox/TComboBox/TDateEdit/TTimeEdit/...) per field type.
+      FActiveEditor: TControl;
       FEditing: Boolean;
       FEditCol: Integer;
       FEditRow: Integer;
@@ -386,16 +411,41 @@ type
 
     procedure StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
     // Inplace TMemo editor helpers.
-    procedure EnsureEditor;
-    procedure PositionEditor;
+    procedure EnsureEditor(TextAlign: TTextAlign);
+    procedure PositionEditor; virtual;
     procedure CommitEditing;
-    procedure CancelEditing;
+    procedure CancelEditing; virtual;
     procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
                             Shift: TShiftState);
     procedure EditorExit(Sender: TObject);
     // Strips the TMemo's painted border/background so the inplace editor
     // blends seamlessly into the cell.
     procedure EditorApplyStyle(Sender: TObject);
+  protected
+    // --- Inplace editor extensibility hooks -----------------------------
+    // The base/string grids always edit through the shared TMemo (FEditor).
+    // The DB grid overrides these to select a typed editor control per field
+    // (TMemo / TCheckBox / TComboBox / TDateEdit / TTimeEdit / composite).
+    //
+    // PrepareCellEditor: choose/create the control for (ACol,ARow), parent it,
+    // wire OnKeyDown/OnExit, and return it. Base returns the shared TMemo.
+    function  PrepareCellEditor(ACol, ARow: Integer): TControl; virtual;
+    // Load the cell's current value into the active editor (InitialChar<>#0
+    // means the user started typing - replace content with that char).
+    procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); virtual;
+    // Read the active editor's value back as display text.
+    function  GetEditorText: string; virtual;
+    // Persist the editor's value into the cell/field. Base writes Cells[].
+    // Returns True if the value was accepted (commit succeeded).
+    function  CommitEditorValue(ACol, ARow: Integer): Boolean; virtual;
+    // Active editor control (FActiveEditor, or the TMemo as a fallback).
+    function  ActiveEditorControl: TControl; virtual;
+    // Minimum column width (px) the chosen editor needs to be usable for the
+    // cell at (ACol,ARow). 0 means "no requirement" (the memo wraps/scrolls
+    // and is fine in a narrow column). StartCellEditing widens the column to
+    // at least this before positioning the editor. Descendants override to
+    // request room for fixed-size controls (combo/date/time/datetime).
+    function  EditorMinColWidth(ACol, ARow: Integer): single; virtual;
     procedure SetReadOnly(const Value: Boolean);
     function  CanEditCell(ACol, ARow: Integer): Boolean; virtual;
     procedure SetRowCount(Value: Integer);
@@ -687,6 +737,7 @@ type
     FFieldName  : string;
     FColor      : TAlphaColor;
     FColorIsSet : Boolean;
+    FDateTimeEditor : TMHGDateTimeEditKind;
 
     function GetGrid: TMultiHeaderDBGrid;
     procedure SetFieldName(const Value: string);
@@ -706,6 +757,10 @@ type
     property FieldName: string read FFieldName write SetFieldName;
     // Background colour of the data cells of this column.
     property Color: TAlphaColor read FColor write SetColor stored IsColorStored;
+    // For datetime fields: whether this column edits date+time (default) or
+    // date only. Ignored for non-datetime fields.
+    property DateTimeEditor: TMHGDateTimeEditKind read FDateTimeEditor
+      write FDateTimeEditor default dteDateTime;
   end;
 
   TMHGColumns = class(TOwnedCollection)
@@ -786,6 +841,17 @@ type
       // Lets DoGetCellStyle read a column's Color in O(1) per cell.
       FColMap: TArray<TMHGColumn>;
 
+      // --- Typed inplace editor controls --------------------------------
+      // Created lazily, reused across edits. Only one is active at a time
+      // (selected per field type); the active one is FActiveEditor.
+      FBoolEditor : TCheckBox;
+      FComboEditor: TComboBox;
+      FDateEditor : TDateEdit;
+      FTimeEditor : TTimeEdit;
+      // For ftDateTime the date control hosts the time control beside it; the
+      // composite is positioned as a unit (see PositionEditor override).
+      FEditField  : TField; // field bound to the editor currently open
+
     function GetDataSource: TDataSource;
     procedure SetDataSource(const Value: TDataSource);
     procedure SetRowCacheSize(const Value: integer);
@@ -814,9 +880,25 @@ type
     procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
     procedure DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle); override;
     procedure DoSelectCell; override;
-    // Inplace editing for the data-bound grid is not wired yet; keep it
-    // view-only so the base grids' editor does not write into the DataSet.
+    // Data-bound inplace editing: a typed editor is chosen per field.
     function CanEditCell(ACol, ARow: Integer): Boolean; override;
+    // --- Typed editor overrides (see base hooks) ------------------------
+    function  PrepareCellEditor(ACol, ARow: Integer): TControl; override;
+    procedure PositionEditor; override;
+    procedure CancelEditing; override;
+    procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); override;
+    function  GetEditorText: string; override;
+    function  CommitEditorValue(ACol, ARow: Integer): Boolean; override;
+    function  EditorMinColWidth(ACol, ARow: Integer): single; override;
+    // Field bound to a given grid column (nil if out of range / no dataset).
+    function  FieldForCol(ACol: Integer): TField;
+    // Editor kind for a field, from DataType / FieldKind / ReadOnly.
+    function  EditorKindForField(Field: TField): TMHGEditorKind;
+    // The Columns collection item that drives a given field (matched by
+    // FieldName), or nil if the field isn't bound to a column.
+    function  ColumnForField(Field: TField): TMHGColumn;
+    // Lazily create & wire the typed editor controls.
+    procedure EnsureTypedEditors;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -2342,6 +2424,14 @@ begin
   end;
 end;
 
+function TMultiHeaderGrid.ActiveEditorControl: TControl;
+begin
+  if FActiveEditor<>nil then
+    Result:=FActiveEditor
+  else
+    Result:=FEditor;
+end;
+
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
   AutoSizeCols(ForcePrecise); // also re-fits header heights to the new widths
@@ -2492,18 +2582,30 @@ begin
   var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
   var CellDelimterHeight:=FGridLineWidth;
 
-  // Pass 1: minimum height each level needs from its own single-row
-  // (RowSpan=1) elements. Start every level at one text line.
+  // Pass 1: minimum height each level needs from its content. Levels start at
+  // just padding (NOT a full text line) - a level that ends up holding only
+  // blank filler cells must not reserve a line of text height. Real captions,
+  // and titles distributing through the filler stack above them, raise the
+  // levels they cover below.
+  var MinLevel:=CellPaddingHeight+CellDelimterHeight/2;
   var LevelHeight: TArray<Single>;
   SetLength(LevelHeight,FHeaderLevels.Count);
   for i:=0 to FHeaderLevels.Count-1 do
-    LevelHeight[i]:=BaseTH+CellPaddingHeight+CellDelimterHeight/2;
+    LevelHeight[i]:=MinLevel;
 
   for i:=0 to FHeaderLevels.Count-1 do begin
     var Col:=0;
     for j:=0 to FHeaderLevels[i].Count-1 do begin
       var Element:=FHeaderLevels[i][j];
       var DrawCol:=Col+Element.ColSkip;
+
+      // Blank filler cells carry no text; they take their height from the
+      // title distributing up into them (below) or from a real caption sharing
+      // the level. Skip them so they reserve no line of their own.
+      if (Element.Caption='') or HeaderCellIsFiller(i, DrawCol) then begin
+        Col:=Col+Element.ColSpan;
+        Continue;
+      end;
 
       Canvas.Font.Assign(FCellFont);
       if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
@@ -2528,13 +2630,28 @@ begin
 
       var Needed:=NeededText+CellPaddingHeight+CellDelimterHeight/2;
 
-      // Distribute the requirement across the RowSpan the element covers.
-      // For RowSpan=1 (the common case, incl. fillers' stack handled via
-      // the merged rect) this just bumps the element's own level.
+      // The cell visually occupies its declared RowSpan AND any blank-filler
+      // levels stacked directly above it (a short column's title is drawn over
+      // the combined filler+title rect - see HeaderMergedRect). Count those
+      // fillers so a tall/wrapped title spreads its height across the whole
+      // stack instead of forcing its own single level to grow (which made the
+      // header rows too tall and left the filler levels unaccounted for).
+      var TopLevel:=i;
+      while (TopLevel>0) and HeaderCellIsFiller(TopLevel-1, DrawCol) do
+        Dec(TopLevel);
+
       var Span:=Element.RowSpan;
       if Span<1 then Span:=1;
-      var Share:=Needed/Span;
-      for var L:=i to Min(i+Span-1,FHeaderLevels.Count-1) do
+      var BottomLevel:=Min(i+Span-1,FHeaderLevels.Count-1);
+
+      // Spread the requirement evenly across every level the cell covers
+      // (filler levels above + its own + any RowSpan below). Each level is
+      // bumped to at least its share, so the levels' SUM (which is how the
+      // merged height is drawn) covers Needed.
+      var CoveredLevels:=BottomLevel-TopLevel+1;
+      if CoveredLevels<1 then CoveredLevels:=1;
+      var Share:=Needed/CoveredLevels;
+      for var L:=TopLevel to BottomLevel do
         LevelHeight[L]:=Max(LevelHeight[L],Share);
 
       Col:=Col+Element.ColSpan;
@@ -2651,6 +2768,13 @@ begin
   var CellDelimterWidth:=FGridLineWidth/2;
   var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth+1;
 
+  // Upper bound on how wide a SINGLE unbreakable word may push a column, so
+  // one pathological token (a long URL/id with no spaces) cannot blow the
+  // column out. Past the cap we accept a mid-word break as the lesser evil.
+  var VP:=ViewPortWidth;
+  if VP<=0 then VP:=600;
+  var WordWidthCap:Single:=Max(200, VP*0.6);
+
   // Optimization: if there's no WordWrap, use the fast path
   var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
@@ -2682,12 +2806,15 @@ begin
         HeaderFullW:=Max(HeaderFullW,
           Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
 
-      // Widest single word (per spanned column).
-      var Words:=Element.Caption.Split([' ', ':', ';', ',', '.', '!', '?',
-                                        '-', '+', '*', '/', '\', '|', #9, #13, #10]);
+      // Widest single unbreakable token - the hard floor for a wrapped
+      // column: a whole word must fit within ONE column's width, so it is NOT
+      // divided by the ColSpan (dividing would let a word split across the
+      // span). Only true whitespace/line-breaks delimit tokens, so a word is
+      // never broken mid-characters.
+      var Words:=Element.Caption.Split([' ', #9, #13, #10]);
       for var Word in Words do
         if Word<>'' then
-          HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word)/Element.FColSpan);
+          HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word));
     end;
 
     // Optimization: if this column has no WordWrap, use the original fast logic
@@ -2794,22 +2921,40 @@ begin
     // Smart wrap: when the header is much wider than the data - header width
     // > 50px AND header exceeds data by > 20px - and the header is allowed to
     // wrap, size the column to the DATA instead and let the caption wrap onto
-    // extra lines (AutoSizeHeaders then grows the height). This keeps wide
-    // multi-word captions from forcing every column unnecessarily wide, while
-    // respecting the designed HeaderWordWrap setting.
+    // extra lines (AutoSizeHeaders then grows the height).
+    var Wrapped:=CanWrapHdr and (HeaderFullW>50) and (HeaderFullW-DataW>20);
+
     var TargetW:Single;
-    if CanWrapHdr and (HeaderFullW>50) and (HeaderFullW-DataW>20) then
-      TargetW:=Max(DataW,HeaderWordW)   // wrap header to data; never below widest word
+    if Wrapped then
+      // Wrap header to data width, but never below the widest whole word so
+      // words are not split - except an unusually long word is capped at
+      // WordWidthCap (it then character-breaks rather than blow the column out).
+      TargetW:=Max(DataW, Min(HeaderWordW, WordWidthCap))
     else
       TargetW:=Max(HeaderFullW,DataW);
 
     // Add the padding
     TargetW:=TargetW+CellPaddingFull;
 
+    var NewWidth:=Ceil(TargetW);
+
+    // When the header wraps, AutoSizeHeaders gives the text only
+    // (ColWidth - Left - Right - FGridLineWidth) - which subtracts a bit more
+    // than CellPaddingFull added (full grid line vs half, no +1). A column
+    // sized to exactly the widest word can then come up a pixel short and split
+    // it. Guarantee the realised text width covers the widest whole word
+    // (unless over the cap) with a small safety margin.
+    if Wrapped then begin
+      var WordFloor:=Min(HeaderWordW, WordWidthCap);
+      var MinColForWord:=Ceil(WordFloor + CellPadding.Left + CellPadding.Right +
+                              FGridLineWidth + 2);
+      if NewWidth<MinColForWord then
+        NewWidth:=MinColForWord;
+    end;
+
     // Floor at the column's own MinWidth (or a small absolute minimum), so a
     // genuinely narrow column (e.g. a short type/flag field) can autosize
     // tight instead of being padded out to the global default width.
-    var NewWidth:=Trunc(TargetW);
     var Floor:=Max(10,FColData[i].MinWidth);
     if NewWidth<Floor then
       NewWidth:=Floor;
@@ -3605,9 +3750,12 @@ begin
           (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
 end;
 
-procedure TMultiHeaderGrid.EnsureEditor;
+procedure TMultiHeaderGrid.EnsureEditor(TextAlign: TTextAlign);
 begin
-  if FEditor<>nil then Exit;
+  if FEditor<>nil then begin
+    FEditor.TextSettings.HorzAlign:=TextAlign;
+    Exit;
+  end;
 
   // A clipping host sized to the cell interior. Both the backing fill and the
   // memo are parented here and clipped to it, so text/fill never bleed into
@@ -3641,6 +3789,7 @@ begin
   FEditor.OnKeyDown:=EditorKeyDown;
   FEditor.OnExit:=EditorExit;
   FEditor.OnApplyStyleLookup:=EditorApplyStyle;
+  FEditor.TextSettings.HorzAlign:=TextAlign;
 end;
 
 procedure TMultiHeaderGrid.EditorApplyStyle(Sender: TObject);
@@ -3660,9 +3809,46 @@ begin
     TControl(Obj).Visible:=False;
 end;
 
+procedure TMultiHeaderGrid.LoadEditorValue(ACol, ARow: Integer; InitialChar: Char);
+begin
+  // Base: the active editor is the TMemo.
+  if InitialChar>=' ' then
+    FEditor.Text:=InitialChar          // typing replaces the cell content
+  else
+    FEditor.Text:=Cells[ACol,ARow];    // F2 / double-click edits existing text
+end;
+
+function TMultiHeaderGrid.GetEditorText: string;
+begin
+  if FEditor<>nil then
+    Result:=FEditor.Text
+  else
+    Result:='';
+end;
+
+function TMultiHeaderGrid.CommitEditorValue(ACol, ARow: Integer): Boolean;
+begin
+  // Base: write the editor text straight into the cell.
+  var NewText:=GetEditorText;
+  Result:=True;
+  if (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount) then
+    if Cells[ACol,ARow]<>NewText then begin
+      Cells[ACol,ARow]:=NewText; // SetCells fires OnSetCellText / invalidates
+      // The new content may need more (or fewer) lines, so re-fit the row
+      // height. A merged cell spans several rows - autosize that whole range.
+      var MergedCell: TMergedCell;
+      if IsMergedCell(ACol,ARow,MergedCell) then
+        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, True)
+      else
+        AutoSizeRows(ARow, ARow, True);
+      UpdateSize; // total height changed -> refresh scrollbar range
+    end;
+end;
+
 procedure TMultiHeaderGrid.PositionEditor;
 begin
-  if (FEditor=nil) or (not FEditing) then Exit;
+  var Ed:=ActiveEditorControl;
+  if (Ed=nil) or (not FEditing) then Exit;
 
   // Build the rect EXACTLY as DrawCells does, so the editor lines up with the
   // painted cell regardless of GridLineWidth. The plain GetCellRect overload
@@ -3684,15 +3870,42 @@ begin
   var Top:=HeaderHeight;
   if R.Top<Top then R.Top:=Top;
 
-  // Match the cell font.
-  FEditor.TextSettings.Font.Assign(FCellFont);
+  // Clamp the right/bottom edges to the visible cells area (before the
+  // scrollbars). Without this an editor wider/taller than the viewport - e.g.
+  // after a column was widened past the grid's right edge - paints outside the
+  // grid and leaves rendering artefacts at the border.
+  var MaxRight:=ViewPortWidth;
+  var MaxBottom:=HeaderHeight+ViewCellsHeight;
+  if R.Right>MaxRight then R.Right:=MaxRight;
+  if R.Bottom>MaxBottom then R.Bottom:=MaxBottom;
+
+  // Only show the editor if a positive area remains after clamping.
+  if (R.Width<=0) or (R.Height<=0) then begin
+    Ed.Visible:=False;
+    Exit;
+  end;
+
+  if Ed is TCheckBox then begin
+    // TCheckBox must be in center
+    Ed.Position.X:=(R.Left+R.Right-Ed.Width)/2;
+    Ed.Position.Y:=(R.Top+R.Bottom-Ed.Height)/2;
+  end else begin
+    Ed.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4,
+                 R.Width-FGridLineWidth/2, R.Height-FGridLineWidth/2);
+  end;
+
+
+  // Match the cell font (only controls that expose TextSettings).
+  if Ed is TMemo then
+    TMemo(Ed).TextSettings.Font.Assign(FCellFont);
 
   // Hide the editor entirely if the cell has scrolled out of the visible area.
   var Vis:=(R.Bottom>HeaderHeight) and (R.Top<Height) and
            (R.Right>0) and (R.Left<Width);
 
-  if FEditorHost<>nil then
-  begin
+  Ed.Visible:=Vis;
+  if Vis then Ed.BringToFront;
+  if FEditorHost<>nil then begin
     // Host fills the cell interior; backing + memo align Client and are
     // clipped to it.
     FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4,
@@ -3700,6 +3913,15 @@ begin
     FEditorHost.Visible:=Vis;
     if Vis then FEditorHost.BringToFront;
   end;
+end;
+
+function TMultiHeaderGrid.PrepareCellEditor(ACol, ARow: Integer): TControl;
+begin
+  // Base/string grids always use the shared TMemo.
+
+  EnsureEditor(ColTextHAlignment[ACol]);
+  FActiveEditor:=FEditor;
+  Result:=FEditor;
 end;
 
 procedure TMultiHeaderGrid.StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
@@ -3721,7 +3943,7 @@ begin
   // Commit any edit already in progress before starting a new one.
   if FEditing then CommitEditing;
 
-  EnsureEditor;
+  EnsureEditor(ColTextHAlignment[ACol]);
   FEditCol:=ACol;
   FEditRow:=ARow;
   FEditing:=True;
@@ -3730,16 +3952,53 @@ begin
     FEditor.Text:=InitialChar          // typing replaces the cell content
   else
     FEditor.Text:=Cells[ACol,ARow];    // F2 / double-click edits existing text
+  if FEditing then CommitEditing;
+
+  // Let the (overridable) factory pick/create the editor control for this
+  // cell. Base returns the shared TMemo; the DB grid may return a typed one.
+  var Ed:=PrepareCellEditor(ACol, ARow);
+  if Ed=nil then Exit; // no editor available for this cell
+
+  FEditCol:=ACol;
+  FEditRow:=ARow;
+  FEditing:=True;
+
+  // If the chosen editor needs more room than the (possibly merged) cell
+  // currently offers, widen the anchor column before positioning so the
+  // control isn't clipped in a narrow column.
+  var MinW:=EditorMinColWidth(ACol, ARow);
+  if MinW>0 then begin
+    var SpanW:=GetColWidth(ACol);
+    var Anchor:=ACol;
+    var MC: TMergedCell;
+    if IsMergedCell(ACol, ARow, MC) then begin
+      Anchor:=MC.Col;
+      SpanW:=0;
+      for var K:=0 to MC.ColSpan-1 do
+        SpanW:=SpanW+GetColWidth(MC.Col+K);
+    end;
+    if SpanW<MinW then begin
+      // Add the whole deficit to the anchor column. SetColWidth clamps to the
+      // column's MaxWidth, so an explicit MaxWidth still wins.
+      ColWidths[Anchor]:=Trunc(GetColWidth(Anchor)+(MinW-SpanW));
+      // Widening can push the cell's right edge past the viewport. Bring the
+      // (now wider) cell fully back into view so the editor isn't drawn half
+      // outside the grid, which leaves rendering artefacts at the border.
+      FSelectedCell:=Point(FEditCol, FEditRow);
+      ScrollToSelectedCell;
+    end;
+  end;
+
+  LoadEditorValue(ACol, ARow, InitialChar);
 
   PositionEditor;
-  if FEditorHost<>nil then
-  begin
-    FEditorHost.Visible:=True;
-    FEditorHost.BringToFront;
-  end;
-  FEditor.SetFocus;
-  // Caret to end.
-  FEditor.GoToTextEnd;
+  Ed.Visible:=True;
+  Ed.BringToFront;
+  if Ed.CanFocus then
+    Ed.SetFocus;
+  // Caret to end (text editors only).
+  if Ed is TMemo then
+    TMemo(Ed).GoToTextEnd;
 end;
 
 procedure TMultiHeaderGrid.CommitEditing;
@@ -3764,6 +4023,14 @@ begin
       UpdateSize; // total height changed -> refresh scrollbar range
     end;
 
+  var Ed:=ActiveEditorControl;
+  if Ed<>nil then Ed.Visible:=False;
+
+  // Persist via the (overridable) hook. The DB grid writes a typed value to
+  // the field with its own try/except guard; the base writes Cells[].
+  CommitEditorValue(Col, Row);
+
+  FActiveEditor:=nil;
   if CanFocus then SetFocus;
 end;
 
@@ -3771,7 +4038,9 @@ procedure TMultiHeaderGrid.CancelEditing;
 begin
   if not FEditing then Exit;
   FEditing:=False;
-  if FEditorHost<>nil then FEditorHost.Visible:=False;
+  var Ed:=ActiveEditorControl;
+  if Ed<>nil then Ed.Visible:=False;
+  FActiveEditor:=nil;
   if CanFocus then SetFocus;
   Invalidate;
 end;
@@ -3842,6 +4111,12 @@ begin
         KeyChar:=#0;
       end;
   end;
+end;
+
+function TMultiHeaderGrid.EditorMinColWidth(ACol, ARow: Integer): single;
+begin
+  // Base/string grids edit with a TMemo, which is fine in a narrow column.
+  Result:=0;
 end;
 
 procedure TMultiHeaderGrid.EditorExit(Sender: TObject);
@@ -4579,6 +4854,7 @@ begin
   inherited; // base initialises widths, alignments, separator, etc.
   FColor:=TAlphaColorRec.White;
   FColorIsSet:=False;
+  FDateTimeEditor:=dteDateTime;
 end;
 
 procedure TMHGColumn.Assign(Source: TPersistent);
@@ -4589,6 +4865,7 @@ begin
     FFieldName:=C.FFieldName;
     FColor:=C.FColor;
     FColorIsSet:=C.FColorIsSet;
+    FDateTimeEditor:=C.FDateTimeEditor;
     Changed;
   end;
 end;
@@ -5361,10 +5638,378 @@ begin
   end;
 end;
 
+function TMultiHeaderDBGrid.FieldForCol(ACol: Integer): TField;
+begin
+  Result:=nil;
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+  var Fields:=GetVisibleFields;
+  if (ACol<0) or (ACol>High(Fields)) then Exit;
+  Result:=Fields[ACol];
+end;
+
+function TMultiHeaderDBGrid.EditorKindForField(Field: TField): TMHGEditorKind;
+begin
+  Result:=ekNone;
+  if Field=nil then Exit;
+
+  // Read-only and non-data (calculated/internal-calc) fields are never edited.
+  if Field.ReadOnly then Exit;
+  if Field.FieldKind in [fkCalculated, fkInternalCalc] then Exit;
+
+  // Lookup fields -> combobox of the looked-up values.
+  if Field.FieldKind=fkLookup then
+    Exit(ekComboBox);
+
+  case Field.DataType of
+    ftBoolean:
+      Result:=ekCheckBox;
+    ftDate:
+      Result:=ekDate;
+    ftTime:
+      Result:=ekTime;
+    ftDateTime, ftTimeStamp, ftOraTimeStamp:
+      begin
+        // The owning column decides date-only vs date+time (default).
+        var Col:=ColumnForField(Field);
+        if (Col<>nil) and (Col.DateTimeEditor=dteDate) then
+          Result:=ekDate
+        else
+          Result:=ekDateTime;
+      end;
+
+    // Whitelisted text + numeric types: edit as text through a TMemo and
+    // round-trip via Field.AsString (guarded by try/except at commit).
+    ftString, ftWideString, ftFixedChar, ftFixedWideChar, ftGuid,
+    ftMemo, ftWideMemo, ftFmtMemo, ftOraClob,
+    ftSmallint, ftInteger, ftWord, ftLargeint, ftLongWord, ftShortint, ftByte,
+    ftFloat, ftCurrency, ftBCD, ftFMTBcd, ftSingle, ftExtended:
+      Result:=ekMemo;
+  else
+    // BLOB / binary / structured / cursor / array / stream etc. - no editor.
+    Result:=ekNone;
+  end;
+end;
+
+function TMultiHeaderDBGrid.ColumnForField(Field: TField): TMHGColumn;
+begin
+  Result:=nil;
+  if Field=nil then Exit;
+  for var i:=0 to FColumns.Count-1 do
+    if SameText(FColumns[i].FieldName, Field.FieldName) then
+      Exit(FColumns[i]);
+end;
+
+procedure TMultiHeaderDBGrid.EnsureTypedEditors;
+
+  procedure WireCommon(C: TControl);
+  begin
+    C.Parent:=Self;
+    C.Visible:=False;
+    C.OnKeyDown:=EditorKeyDown;
+    C.OnExit:=EditorExit;
+  end;
+
+begin
+  if FBoolEditor=nil then begin
+    FBoolEditor:=TCheckBox.Create(Self);
+    FBoolEditor.Width:=16;
+    WireCommon(FBoolEditor);
+  end;
+  if FComboEditor=nil then begin
+    FComboEditor:=TComboBox.Create(Self);
+    WireCommon(FComboEditor);
+  end;
+  if FDateEditor=nil then begin
+    FDateEditor:=TDateEdit.Create(Self);
+    // Compact, fixed-width date so the control doesn't reserve space for a
+    // long localized format (which left empty padding inside the box).
+    FDateEditor.Format:='dd.MM.yyyy';
+    WireCommon(FDateEditor);
+  end;
+  if FTimeEditor=nil then begin
+    FTimeEditor:=TTimeEdit.Create(Self);
+    // Show seconds; compact 24h layout keeps the box tight.
+    FTimeEditor.Format:='HH:nn:ss';
+    WireCommon(FTimeEditor);
+  end;
+end;
+
+function TMultiHeaderDBGrid.EditorMinColWidth(ACol, ARow: Integer): single;
+const
+  // Usable minimum widths (px) for the fixed-size typed editors. The memo and
+  // checkbox are comfortable in a narrow column, so they keep the default 0.
+  MINW_COMBO    = 120;
+  MINW_DATE     = 83;  // single 'dd.MM.yyyy' date editor
+  MINW_TIME     = 95;  // HH:nn:ss + picker button
+  MINW_DATETIME = 156; // date + time composite (date +5 / time -3 vs even split)
+begin
+  Result:=0;
+  var Field:=FieldForCol(ACol);
+  if Field=nil then Exit;
+
+  case EditorKindForField(Field) of
+    ekComboBox: Result:=MINW_COMBO+FGridLineWidth/2;
+    ekDate:     Result:=MINW_DATE+FGridLineWidth/2;
+    ekTime:     Result:=MINW_TIME+FGridLineWidth/2;
+    ekDateTime: Result:=MINW_DATETIME+FGridLineWidth/2;
+  else
+    Result:=0; // ekMemo / ekCheckBox / ekNone
+  end;
+end;
+
 function TMultiHeaderDBGrid.CanEditCell(ACol, ARow: Integer): Boolean;
 begin
-  // Data-bound editing is not implemented yet - stay view-only.
   Result:=False;
+  if FReadOnly then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+
+  var Field:=FieldForCol(ACol);
+  if Field=nil then Exit;
+
+  // Editable only when a typed editor exists for this field's datatype.
+  Result:=EditorKindForField(Field)<>ekNone;
+end;
+
+function TMultiHeaderDBGrid.PrepareCellEditor(ACol, ARow: Integer): TControl;
+begin
+  Result:=nil;
+  var Field:=FieldForCol(ACol);
+  if Field=nil then Exit;
+
+  FEditField:=Field;
+  var Kind:=EditorKindForField(Field);
+
+  case Kind of
+    ekMemo:
+      // Reuse the shared TMemo via the base implementation.
+      Result:=inherited PrepareCellEditor(ACol, ARow);
+
+    ekCheckBox:
+      begin
+        EnsureTypedEditors;
+        FActiveEditor:=FBoolEditor;
+        Result:=FBoolEditor;
+      end;
+
+    ekComboBox:
+      begin
+        EnsureTypedEditors;
+        // Populate the list from the lookup dataset's display values.
+        FComboEditor.Items.Clear;
+        if (Field.FieldKind=fkLookup) and (Field.LookupDataSet<>nil) then begin
+          var LDS:=Field.LookupDataSet;
+          var BM:=LDS.Bookmark;
+          LDS.DisableControls;
+          try
+            LDS.First;
+            while not LDS.Eof do begin
+              FComboEditor.Items.Add(LDS.FieldByName(Field.LookupResultField).AsString);
+              LDS.Next;
+            end;
+          finally
+            if LDS.BookmarkValid(BM) then LDS.Bookmark:=BM;
+            LDS.EnableControls;
+          end;
+        end;
+        FActiveEditor:=FComboEditor;
+        Result:=FComboEditor;
+      end;
+
+    ekDate:
+      begin
+        EnsureTypedEditors;
+        FActiveEditor:=FDateEditor;
+        Result:=FDateEditor;
+      end;
+
+    ekTime:
+      begin
+        EnsureTypedEditors;
+        FActiveEditor:=FTimeEditor;
+        Result:=FTimeEditor;
+      end;
+
+    ekDateTime:
+      begin
+        EnsureTypedEditors;
+        // Composite: the date control is the focused/active editor; the time
+        // control rides alongside it (positioned in DoPositionComposite below
+        // via the base PositionEditor, then nudged). For layout simplicity the
+        // time editor is shown to the right of the date editor.
+        FActiveEditor:=FDateEditor;
+        Result:=FDateEditor;
+      end;
+  else
+    Result:=nil; // ekNone - not editable
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.LoadEditorValue(ACol, ARow: Integer; InitialChar: Char);
+begin
+  var Field:=FEditField;
+  if Field=nil then begin
+    inherited; // memo fallback
+    Exit;
+  end;
+
+  case EditorKindForField(Field) of
+    ekMemo:
+      inherited;  // load text into the shared TMemo
+
+    ekCheckBox:
+      FBoolEditor.IsChecked:=Field.AsBoolean;
+
+    ekComboBox:
+      FComboEditor.ItemIndex:=FComboEditor.Items.IndexOf(Field.AsString);
+
+    ekDate:
+      if Field.IsNull then FDateEditor.Date:=Now
+      else FDateEditor.Date:=Field.AsDateTime;
+
+    ekTime:
+      if Field.IsNull then FTimeEditor.Time:=Now
+      else FTimeEditor.Time:=Field.AsDateTime;
+
+    ekDateTime:
+      begin
+        var V: TDateTime;
+        if Field.IsNull then V:=Now else V:=Field.AsDateTime;
+        FDateEditor.Date:=V;
+        FTimeEditor.Time:=V;
+        FTimeEditor.Visible:=True;
+      end;
+  end;
+end;
+
+function TMultiHeaderDBGrid.GetEditorText: string;
+begin
+  var Field:=FEditField;
+  if Field=nil then Exit(inherited GetEditorText);
+
+  case EditorKindForField(Field) of
+    ekMemo:      Result:=inherited GetEditorText;
+    ekCheckBox:  if FBoolEditor.IsChecked then Result:='1' else Result:='0';
+    ekComboBox:  if FComboEditor.Selected<>nil then Result:=FComboEditor.Selected.Text else Result:='';
+    ekDate:      Result:=DateToStr(FDateEditor.Date);
+    ekTime:      Result:=TimeToStr(FTimeEditor.Time);
+    ekDateTime:  Result:=DateTimeToStr(Trunc(FDateEditor.Date)+Frac(FTimeEditor.Time));
+  else
+    Result:='';
+  end;
+end;
+
+function TMultiHeaderDBGrid.CommitEditorValue(ACol, ARow: Integer): Boolean;
+// Writes the typed editor value into the bound field, with a try/except guard
+// that reverts the dataset edit on a conversion/validation failure.
+var
+  DS: TDataSet;
+  Field: TField;
+
+  procedure ApplyToCurrentRecord;
+  begin
+    if not (DS.State in [dsEdit, dsInsert]) then DS.Edit;
+    try
+      case EditorKindForField(Field) of
+        ekCheckBox:
+          Field.AsBoolean:=FBoolEditor.IsChecked;
+        ekComboBox:
+          if FComboEditor.ItemIndex>=0 then
+            Field.AsString:=FComboEditor.Selected.Text;
+        ekDate:
+          // Pure ftDate -> midnight. A datetime field shown date-only keeps
+          // its existing time component (only the date part is replaced).
+          if Field.DataType in [ftDateTime, ftTimeStamp, ftOraTimeStamp] then begin
+            var OldTime: TDateTime;
+            if Field.IsNull then OldTime:=0 else OldTime:=Frac(Field.AsDateTime);
+            Field.AsDateTime:=Trunc(FDateEditor.Date)+OldTime;
+          end else
+            Field.AsDateTime:=Trunc(FDateEditor.Date);
+        ekTime:
+          Field.AsDateTime:=Frac(FTimeEditor.Time);
+        ekDateTime:
+          Field.AsDateTime:=Trunc(FDateEditor.Date)+Frac(FTimeEditor.Time);
+      else
+        // ekMemo and any text path: round-trip via AsString.
+        Field.AsString:=GetEditorText;
+      end;
+      DS.Post;
+    except
+      DS.Cancel;
+      raise;
+    end;
+  end;
+
+begin
+  Result:=False;
+  Field:=FEditField;
+  if Field=nil then Exit;
+
+  DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+  if Field.ReadOnly then Exit;
+
+  try
+    if ARow=DS.RecNo-1 then
+      ApplyToCurrentRecord
+    else begin
+      DS.DisableControls;
+      try
+        var Bookmark:=DS.Bookmark;
+        try
+          DS.RecNo:=ARow+1;
+          ApplyToCurrentRecord;
+        finally
+          if DS.BookmarkValid(Bookmark) then
+            DS.Bookmark:=Bookmark;
+        end;
+      finally
+        DS.EnableControls;
+      end;
+    end;
+    Result:=True;
+  except
+    // Conversion/validation failed: keep the old value, swallow so the grid
+    // simply stays put. (Change to `raise` to surface the error instead.)
+    Result:=False;
+  end;
+
+  // The cached row text is now stale - drop it so DoGetCellText re-reads.
+  FCellTexts.Remove(ARow);
+  FEditField:=nil;
+  if FTimeEditor<>nil then FTimeEditor.Visible:=False;
+  Invalidate;
+end;
+
+procedure TMultiHeaderDBGrid.CancelEditing;
+begin
+  inherited;
+  FEditField:=nil;
+  if FTimeEditor<>nil then FTimeEditor.Visible:=False;
+end;
+
+procedure TMultiHeaderDBGrid.PositionEditor;
+begin
+  inherited; // positions the active editor (date control for the composite)
+
+  // For the ftDateTime composite, lay the time editor immediately to the
+  // right of the date editor, splitting the cell width between them.
+  if FEditing and (FEditField<>nil) and
+     (EditorKindForField(FEditField)=ekDateTime) and
+     (FDateEditor<>nil) and (FTimeEditor<>nil) and FDateEditor.Visible then begin
+    // Split the cell between the two controls, biased so the date editor is a
+    // little wider than the time editor. At the composite's minimum width
+    // (MINW_DATETIME=156) this yields date=82, time=74 (date +5 / time -3
+    // versus the previous even 77/77 split).
+    var Total:=FDateEditor.Width;
+    var DateW:=Total/2+4;
+    var TimeW:=Total-DateW;        // = Total/2 - 4
+    FDateEditor.Width:=DateW;
+    FTimeEditor.SetBounds(FDateEditor.Position.X+DateW, FDateEditor.Position.Y,
+                          TimeW, FDateEditor.Height);
+    FTimeEditor.Visible:=True;
+    FTimeEditor.BringToFront;
+  end;
 end;
 
 procedure TMultiHeaderDBGrid.SetDataSource(const Value: TDataSource);
