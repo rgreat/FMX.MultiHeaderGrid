@@ -102,8 +102,10 @@ end;
 
 procedure TForm1.FormShow(Sender: TObject);
 begin
-  Width:=Min(1480,Trunc(Screen.Width));
-  Left:=Max(Trunc(Screen.Width-Width) div 2,5)
+  Width:=Min(Grid3.FullTableWidth+46,Trunc(Screen.Width-40));
+  Height:=Min(800,Trunc(Screen.Height-80));
+  Left:=Max(Trunc(Screen.Width-Width) div 2,5);
+  Top:=Max(Trunc(Screen.Height-Height) div 2,5);
 end;
 
 // ---------------------------------------------------------
@@ -338,7 +340,7 @@ procedure TForm1.ApplyGrid3WidthLimits;
 const
   Cols : array[0..3] of string  = ('klns', 'klkod', 'klnazv', 'klname');
   MinW : array[0..3] of Integer = (    50,      50,       50,      100);
-  MaxW : array[0..3] of Integer = (   150,     150,      150,      400);
+  MaxW : array[0..3] of Integer = (   150,     150,      150,      320);
 begin
   for var i:=0 to High(Cols) do begin
     var Column:=Grid3.Columns.FindByFieldName(Cols[i]);

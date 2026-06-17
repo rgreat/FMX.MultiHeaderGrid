@@ -2726,13 +2726,29 @@ begin
         if CellStyle.FontStyleIsSet then Canvas.Font.Style:=CellStyle.FontStyle;
 
         if WordWrapEnabled then begin
-          // With WordWrap, measure the width of the longest word
-          var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
-          var MaxWordWidth:=0.0;
-          for var Word in Words do
-            if Word<>'' then
-              MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
-          DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          // Word-wrap sizing: normally fit just the widest word and let the
+          // rest wrap. But do NOT wrap a cell whose whole content already fits
+          // in a small width - wrapping a short value onto several lines looks
+          // bad. Measure the full one-line width; only fall back to the
+          // widest-word width when the content is genuinely wide (> 120px).
+          const DataWrapGateW = 120;
+          var FullLineW:=0.0;
+          var Lines:=Text.Split([#13#10]);
+          for var Line in Lines do
+            FullLineW:=Max(FullLineW,Canvas.TextWidth(Line));
+
+          if FullLineW>DataWrapGateW then begin
+            // Wide content: size to the widest single word, let it wrap.
+            var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
+            var MaxWordWidth:=0.0;
+            for var Word in Words do
+              if Word<>'' then
+                MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+            DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          end else begin
+            // Already small enough: keep it on one line.
+            DataW:=Max(DataW,FullLineW/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          end;
         end else begin
           // Without WordWrap, measure each line
           var Lines:=Text.Split([#13#10]);
