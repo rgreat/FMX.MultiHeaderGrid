@@ -4,7 +4,8 @@ interface
 
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
-  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts, Data.DB;
+  FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
+  FMX.Memo, FMX.ScrollBox, Data.DB;
 
 type
 
@@ -359,6 +360,14 @@ type
       FVerticalScroll: TScrollShowMode;
       FHorisontalScroll: TScrollShowMode;
 
+      // Inplace cell editor (basic grids). A single reusable TMemo is moved
+      // over the cell being edited.
+      FEditor: TMemo;
+      FEditing: Boolean;
+      FEditCol: Integer;
+      FEditRow: Integer;
+      FReadOnly: Boolean;
+
     function ResizeStartWidth: Integer;
     procedure SetHeaderWordWrap(const Value: Boolean);
     procedure SetHeaderColumns(const Value: TMHGHeaderColumns);
@@ -374,6 +383,16 @@ type
     function HeaderElementTextWidth(ALevel, ACol: Integer): Single;
 
     procedure StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
+    // Inplace TMemo editor helpers.
+    procedure EnsureEditor;
+    procedure PositionEditor;
+    procedure CommitEditing;
+    procedure CancelEditing;
+    procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
+                            Shift: TShiftState);
+    procedure EditorExit(Sender: TObject);
+    procedure SetReadOnly(const Value: Boolean);
+    function  CanEditCell(ACol, ARow: Integer): Boolean; virtual;
     procedure SetRowCount(Value: Integer);
     procedure SetColCount(Value: Integer);
     procedure SetDefaultColWidth(const Value: integer);
@@ -591,6 +610,8 @@ type
     property SelectedCellColor: TAlphaColor read FSelectedCellColor write SetSelectedCellColor default TAlphaColorRec.Lightblue;
 
     property RowSelect: Boolean read FRowSelect write SetRowSelect default False;
+    // When True the inplace cell editor is disabled and the grid is view-only.
+    property ReadOnly: Boolean read FReadOnly write SetReadOnly default False;
     property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
@@ -788,6 +809,9 @@ type
     procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
     procedure DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle); override;
     procedure DoSelectCell; override;
+    // Inplace editing for the data-bound grid is not wired yet; keep it
+    // view-only so the base grids' editor does not write into the DataSet.
+    function CanEditCell(ACol, ARow: Integer): Boolean; override;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -2726,29 +2750,13 @@ begin
         if CellStyle.FontStyleIsSet then Canvas.Font.Style:=CellStyle.FontStyle;
 
         if WordWrapEnabled then begin
-          // Word-wrap sizing: normally fit just the widest word and let the
-          // rest wrap. But do NOT wrap a cell whose whole content already fits
-          // in a small width - wrapping a short value onto several lines looks
-          // bad. Measure the full one-line width; only fall back to the
-          // widest-word width when the content is genuinely wide (> 120px).
-          const DataWrapGateW = 120;
-          var FullLineW:=0.0;
-          var Lines:=Text.Split([#13#10]);
-          for var Line in Lines do
-            FullLineW:=Max(FullLineW,Canvas.TextWidth(Line));
-
-          if FullLineW>DataWrapGateW then begin
-            // Wide content: size to the widest single word, let it wrap.
-            var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
-            var MaxWordWidth:=0.0;
-            for var Word in Words do
-              if Word<>'' then
-                MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
-            DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
-          end else begin
-            // Already small enough: keep it on one line.
-            DataW:=Max(DataW,FullLineW/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
-          end;
+          // With WordWrap, measure the width of the longest word
+          var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
+          var MaxWordWidth:=0.0;
+          for var Word in Words do
+            if Word<>'' then
+              MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+          DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
         end else begin
           // Without WordWrap, measure each line
           var Lines:=Text.Split([#13#10]);
@@ -3204,7 +3212,10 @@ begin
         DY:=Trunc(ViewCellsHeight/DefaultRowHeight);
       end;
       vkReturn: begin // Enter
-        DoCellClick(FSelectedCell.X, FSelectedCell.Y);
+        if CanEditCell(FSelectedCell.X, FSelectedCell.Y) then
+          StartCellEditing(FSelectedCell.X, FSelectedCell.Y, #0)
+        else
+          DoCellClick(FSelectedCell.X, FSelectedCell.Y);
         Exit;
       end;
       vkEscape: begin
@@ -3252,6 +3263,13 @@ begin
       ScrollToSelectedCell;
       DoSelectCell;
     end;
+  end;
+
+  // F2 edits the current cell's existing content.
+  if IsFocused and (Key=vkF2) then begin
+    StartCellEditing(FSelectedCell.X, FSelectedCell.Y, #0);
+    Key:=0;
+    Exit;
   end;
 
   // Handle text input
@@ -3386,6 +3404,9 @@ end;
 procedure TMultiHeaderGrid.SetSelectedCell(const Value: TPoint);
 begin
   if (FSelectedCell.X<>Value.X) or (FSelectedCell.Y<>Value.Y) then begin
+    // Moving to another cell commits any in-progress edit on the old one.
+    if FEditing and ((FEditCol<>Value.X) or (FEditRow<>Value.Y)) then
+      CommitEditing;
     FSelectedCell:=Value;
     DoSelectCell;
     Invalidate;
@@ -3555,13 +3576,199 @@ begin
     Result:=True;
 end;
 
+function TMultiHeaderGrid.CanEditCell(ACol, ARow: Integer): Boolean;
+begin
+  // Base/string grids are editable unless ReadOnly. Descendants (e.g. the DB
+  // grid) override to apply their own rules.
+  Result:=(not FReadOnly) and
+          (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
+end;
+
+procedure TMultiHeaderGrid.EnsureEditor;
+begin
+  if FEditor<>nil then Exit;
+
+  // Opaque backing: the memo style is made transparent (below), so this
+  // rectangle supplies a solid fill that hides the cell text underneath while
+  // editing. Created first so it sits behind the memo in z-order.
+
+  FEditor:=TMemo.Create(Self);
+  FEditor.Parent:=Self;
+  FEditor.Visible:=False;
+  FEditor.WordWrap:=False;
+  FEditor.AutoSelect:=False;
+  FEditor.StyledSettings:=[];       // take font fully from us
+  FEditor.ShowScrollBars:=False;    // no scrollbars at all
+  FEditor.DisableMouseWheel:=True;
+  // Keep the DEFAULT memo style so its content viewport still fills the
+  // control (a custom 'transparent' style can leave the text in a tiny box).
+  // We simply hide the frame/background style objects on apply.
+  FEditor.OnKeyDown:=EditorKeyDown;
+  FEditor.OnExit:=EditorExit;
+  FEditor.NeedStyleLookup;
+end;
+
+procedure TMultiHeaderGrid.PositionEditor;
+begin
+  if (FEditor=nil) or (not FEditing) then Exit;
+
+  // Build the rect EXACTLY as DrawCells does, so the editor lines up with the
+  // painted cell regardless of GridLineWidth. The plain GetCellRect overload
+  // carries the FGridLineWidth/4 inset that the merged-cell overload omits;
+  // using the same source keeps them aligned. FEditCol/FEditRow are already
+  // the merge anchor (resolved in StartCellEditing).
+  var R:=GetCellRect(FEditCol,FEditRow);
+  var MergedCell: TMergedCell;
+  if IsMergedCell(FEditCol,FEditRow,MergedCell) then begin
+    R.Right:=R.Left;
+    R.Bottom:=R.Top;
+    for var K:=0 to MergedCell.ColSpan-1 do
+      R.Right:=R.Right+GetColWidth(FEditCol+K);
+    for var K:=0 to MergedCell.RowSpan-1 do
+      R.Bottom:=R.Bottom+GetRowHeight(FEditRow+K);
+  end;
+
+  // Clip to the cells viewport so the editor never overlaps the header.
+  var Top:=HeaderHeight;
+  if R.Top<Top then R.Top:=Top;
+
+  FEditor.SetBounds(R.Left, R.Top, R.Width, R.Height);
+
+  // Match the cell font.
+  FEditor.TextSettings.Font.Assign(FCellFont);
+
+  // Hide the editor entirely if the cell has scrolled out of the visible area.
+  var Vis:=(R.Bottom>HeaderHeight) and (R.Top<Height) and
+           (R.Right>0) and (R.Left<Width);
+
+  FEditor.Visible:=Vis;
+  if Vis then FEditor.BringToFront;
+end;
+
 procedure TMultiHeaderGrid.StartCellEditing(ACol, ARow: Integer; InitialChar: Char);
 begin
-  // Implement cell editing
-  // A TEdit could be placed over the cell
+  // If the cell is part of a merge, edit the merge's top-left anchor - that
+  // is where the value lives and what gets drawn.
+  var MergedCell: TMergedCell;
+  if IsMergedCell(ACol, ARow, MergedCell) then begin
+    ACol:=MergedCell.Col;
+    ARow:=MergedCell.Row;
+  end;
+
+  // Let a handler veto or transform the trigger char (back-compat).
   if Assigned(FOnStartEditing) then
     FOnStartEditing(Self, ACol, ARow, InitialChar);
+
+  if not CanEditCell(ACol,ARow) then Exit;
+
+  // Commit any edit already in progress before starting a new one.
+  if FEditing then CommitEditing;
+
+  EnsureEditor;
+  FEditCol:=ACol;
+  FEditRow:=ARow;
+  FEditing:=True;
+
+  if InitialChar>=' ' then
+    FEditor.Text:=InitialChar          // typing replaces the cell content
+  else
+    FEditor.Text:=Cells[ACol,ARow];    // F2 / double-click edits existing text
+
+  PositionEditor;
+  FEditor.Visible:=True;
+  FEditor.BringToFront;
+  FEditor.SetFocus;
+  // Caret to end.
+  FEditor.GoToTextEnd;
 end;
+
+procedure TMultiHeaderGrid.CommitEditing;
+begin
+  if not FEditing then Exit;
+  FEditing:=False; // clear first so EditorExit re-entry is a no-op
+  var Col:=FEditCol;
+  var Row:=FEditRow;
+  var NewText:=FEditor.Text;
+  if FEditor<>nil then FEditor.Visible:=False;
+
+  if (Col>=0) and (Col<FColCount) and (Row>=0) and (Row<FRowCount) then
+    if Cells[Col,Row]<>NewText then begin
+      Cells[Col,Row]:=NewText; // SetCells fires OnSetCellText / invalidates
+      // The new content may need more (or fewer) lines, so re-fit the row
+      // height. A merged cell spans several rows - autosize that whole range.
+      var MergedCell: TMergedCell;
+      if IsMergedCell(Col,Row,MergedCell) then
+        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, True)
+      else
+        AutoSizeRows(Row, Row, True);
+      UpdateSize; // total height changed -> refresh scrollbar range
+    end;
+
+  if CanFocus then SetFocus;
+end;
+
+procedure TMultiHeaderGrid.CancelEditing;
+begin
+  if not FEditing then Exit;
+  FEditing:=False;
+  if FEditor<>nil then FEditor.Visible:=False;
+  if CanFocus then SetFocus;
+  Invalidate;
+end;
+
+procedure TMultiHeaderGrid.EditorKeyDown(Sender: TObject; var Key: Word;
+  var KeyChar: Char; Shift: TShiftState);
+begin
+  case Key of
+    vkReturn:
+      begin
+        // "Single line" = the cell's current text has no line breaks. In that
+        // case a plain Enter ends editing. Once the text spans multiple lines,
+        // plain Enter inserts a newline and Ctrl+Enter is needed to commit.
+        // Ctrl+Enter always commits; Shift+Enter always inserts a newline.
+        var IsMultiline:=FEditor.Lines.Count>1;
+        var WantCommit:=(ssCtrl in Shift) or
+                        ((not IsMultiline) and not (ssShift in Shift));
+        if WantCommit then begin
+          CommitEditing;
+          Key:=0;
+          KeyChar:=#0;
+        end;
+        // Otherwise let the memo insert the line break itself.
+      end;
+    vkEscape:
+      begin
+        CancelEditing;
+        Key:=0;
+        KeyChar:=#0;
+      end;
+    vkTab:
+      begin
+        CommitEditing;
+        // Move selection to the next/previous cell.
+        var NewCol:=FSelectedCell.X+IfThen(ssShift in Shift,-1,1);
+        if (NewCol>=0) and (NewCol<FColCount) then
+          SelectedCell:=Point(NewCol,FSelectedCell.Y);
+        Key:=0;
+        KeyChar:=#0;
+      end;
+  end;
+end;
+
+procedure TMultiHeaderGrid.EditorExit(Sender: TObject);
+begin
+  // Losing focus commits the edit (unless we already cancelled/committed).
+  if FEditing then CommitEditing;
+end;
+
+procedure TMultiHeaderGrid.SetReadOnly(const Value: Boolean);
+begin
+  if FReadOnly<>Value then begin
+    FReadOnly:=Value;
+    if FReadOnly and FEditing then CancelEditing;
+  end;
+end;
+
 
 { TCellStyle }
 
@@ -4160,6 +4367,8 @@ end;
 
 procedure TMultiHeaderGrid.DoGridScroll;
 begin
+  // Keep the inplace editor glued to its cell as the view scrolls.
+  if FEditing then PositionEditor;
   if Assigned(FOnGridScroll) then
     FOnGridScroll(Self,ViewLeft,ViewTop);
 end;
@@ -4185,6 +4394,10 @@ begin
   if not FLastClickIsOnCell then Exit;
 
   inherited;
+
+  // Double-click enters inplace edit of the selected cell.
+  if CanEditCell(FSelectedCell.X,FSelectedCell.Y) then
+    StartCellEditing(FSelectedCell.X,FSelectedCell.Y,#0);
 end;
 
 function TMultiHeaderGrid.GetColTextHAlignment(Index: Integer): TTextAlign;
@@ -5042,6 +5255,12 @@ begin
   finally
     FUpdatingRow:=False;
   end;
+end;
+
+function TMultiHeaderDBGrid.CanEditCell(ACol, ARow: Integer): Boolean;
+begin
+  // Data-bound editing is not implemented yet - stay view-only.
+  Result:=False;
 end;
 
 procedure TMultiHeaderDBGrid.SetDataSource(const Value: TDataSource);
