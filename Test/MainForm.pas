@@ -340,7 +340,7 @@ procedure TForm1.ApplyGrid3WidthLimits;
 const
   Cols : array[0..3] of string  = ('klns', 'klkod', 'klnazv', 'klname');
   MinW : array[0..3] of Integer = (    50,      50,       50,      100);
-  MaxW : array[0..3] of Integer = (   150,     150,      150,      320);
+  MaxW : array[0..3] of Integer = (   150,     150,      150,      350);
 begin
   for var i:=0 to High(Cols) do begin
     var Column:=Grid3.Columns.FindByFieldName(Cols[i]);
