@@ -750,6 +750,11 @@ type
       // we only auto-create on a genuinely new source or a newly opened table
       // (different field set), not on every re-open of the same one.
       FLastAutoSig: string;
+      // Signature of the column layout (ordered field names) realised by the
+      // last ResetTable. When unchanged, a rebuild is a pure re-apply (e.g. a
+      // Min/MaxWidth tweak) and live column widths are preserved instead of
+      // being reset to the design-time Col.Width.
+      FLastColLayout: string;
       FRebuildingHeader: Boolean; // guards ResetTable re-entrancy from column changes
       // Effective column-index -> collection item, rebuilt by ResetTable.
       // Lets DoGetCellStyle read a column's Color in O(1) per cell.
@@ -1347,7 +1352,10 @@ procedure TMultiHeaderGrid.SetColMaxWidth(Index: Integer; const Value: integer);
 begin
   if (Index>=0) and (Index<FColCount) then begin
     FColData[Index].MaxWidth:=Max(Value,FColData[Index].MinWidth);
-    FColData[Index].Widths:=Max(FColData[Index].Widths,FColData[Index].MaxWidth);
+    // A max constraint only shrinks an over-wide column; columns already
+    // within range are left untouched.
+    if FColData[Index].Widths>FColData[Index].MaxWidth then
+      FColData[Index].Widths:=FColData[Index].MaxWidth;
     Invalidate;
   end;
 end;
@@ -1356,7 +1364,10 @@ procedure TMultiHeaderGrid.SetColMinWidth(Index: Integer; const Value: integer);
 begin
   if (Index>=0) and (Index<FColCount) then begin
     FColData[Index].MinWidth:=Min(Value,FColData[Index].MaxWidth);
-    FColData[Index].Widths:=Min(FColData[Index].Widths,FColData[Index].MinWidth);
+    // A min constraint only grows an under-wide column; columns already
+    // within range are left untouched.
+    if FColData[Index].Widths<FColData[Index].MinWidth then
+      FColData[Index].Widths:=FColData[Index].MinWidth;
     Invalidate;
   end;
 end;
@@ -2304,8 +2315,7 @@ end;
 
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
-  AutoSizeCols(ForcePrecise);
-  AutoSizeHeaders;
+  AutoSizeCols(ForcePrecise); // also re-fits header heights to the new widths
   AutoSizeRows(ForcePrecise);
   UpdateSize;
 end;
@@ -2477,9 +2487,14 @@ begin
         var MeasureRect:=TRectF.Create(0,0,W,100000);
         Canvas.MeasureText(MeasureRect,Element.Caption,True,[],
                            TTextAlign.Leading,TTextAlign.Leading);
-        NeededText:=MeasureRect.Height;
+        // Convert the measured (possibly leading-padded) height into a whole
+        // number of text lines, then size by BaseTH. This keeps the wrapped
+        // branch as tight as the explicit-#13#10 branch and avoids the bottom
+        // title row ballooning from MeasureText's internal line spacing.
+        var Lines:=Max(1,Ceil(MeasureRect.Height/Max(BaseTH,1)));
+        NeededText:=Lines*BaseTH;
       end else begin
-        NeededText:=Max(CountLines(Element.Caption),1)*Canvas.TextHeight('A');
+        NeededText:=Max(CountLines(Element.Caption),1)*BaseTH;
       end;
 
       var Needed:=NeededText+CellPaddingHeight+CellDelimterHeight/2;
@@ -2601,7 +2616,6 @@ end;
 procedure TMultiHeaderGrid.AutoSizeCols(ForcePrecise:boolean=False);
 var
   i,j:Integer;
-  MaxWidth:Single;
   Text:string;
 begin
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
@@ -2612,7 +2626,14 @@ begin
   var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
   for i:=0 to FColCount-1 do begin
-    MaxWidth:=0;
+    // HeaderFullW  - widest header caption laid out on a SINGLE line.
+    // HeaderWordW  - widest single word (the tightest a wrapping header can be).
+    // DataW        - widest cell content (honouring cell word-wrap as before).
+    // CanWrapHdr   - any header element over this column allows word wrap.
+    var HeaderFullW:Single:=0;
+    var HeaderWordW:Single:=0;
+    var DataW:Single:=0;
+    var CanWrapHdr:Boolean:=False;
 
     // Check the headers
     for j:=0 to FHeaderLevels.Count-1 do begin
@@ -2620,32 +2641,24 @@ begin
       if not Assigned(Element) then Continue;
 
       Canvas.Font.Assign(FCellFont);
-      if Element.Style.FontNameIsSet then begin
-        Canvas.Font.Family:=Element.Style.FontName;
-      end;
-      if Element.Style.FontSizeIsSet then begin
-        Canvas.Font.Size:=Element.Style.FontSize;
-      end;
-      if Element.Style.FontStyleIsSet then begin
-        Canvas.Font.Style:=Element.Style.FontStyle;
-      end;
+      if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+      if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+      if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
 
-      if HeaderCellWordWrap(Element) then begin
-        // Wrapping header: the column only needs to fit the widest single
-        // word; the rest wraps. Divide across the element's ColSpan.
-        var Words:=Element.Caption.Split([' ', ':', ';', ',', '.', '!', '?',
-                                          '-', '+', '*', '/', '\', '|', #9, #13, #10]);
-        var MaxWordWidth:=0.0;
-        for var Word in Words do
-          if Word<>'' then
-            MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
-        MaxWidth:=Max(MaxWidth,MaxWordWidth/Element.FColSpan);
-      end else begin
-        var Lines:=Element.Caption.Split([#13#10]);
-        for var Line in Lines do begin
-          MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
-        end;
-      end;
+      if HeaderCellWordWrap(Element) then CanWrapHdr:=True;
+
+      // Full one-line width (per spanned column).
+      var Lines:=Element.Caption.Split([#13#10]);
+      for var Line in Lines do
+        HeaderFullW:=Max(HeaderFullW,
+          Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
+
+      // Widest single word (per spanned column).
+      var Words:=Element.Caption.Split([' ', ':', ';', ',', '.', '!', '?',
+                                        '-', '+', '*', '/', '\', '|', #9, #13, #10]);
+      for var Word in Words do
+        if Word<>'' then
+          HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word)/Element.FColSpan);
     end;
 
     // Optimization: if this column has no WordWrap, use the original fast logic
@@ -2674,17 +2687,11 @@ begin
 
           var CellStyle:=CellStyle[i,j];
           Canvas.Font.Assign(FCellFont);
-          if CellStyle.FontNameIsSet then begin
-            Canvas.Font.Family:=CellStyle.FontName;
-          end;
-          if CellStyle.FontSizeIsSet then begin
-            Canvas.Font.Size:=CellStyle.FontSize;
-          end;
-          if CellStyle.FontStyleIsSet then begin
-            Canvas.Font.Style:=CellStyle.FontStyle;
-          end;
+          if CellStyle.FontNameIsSet then Canvas.Font.Family:=CellStyle.FontName;
+          if CellStyle.FontSizeIsSet then Canvas.Font.Size:=CellStyle.FontSize;
+          if CellStyle.FontStyleIsSet then Canvas.Font.Style:=CellStyle.FontStyle;
 
-          MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
+          DataW:=Max(DataW,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
         end;
       end;
     end else begin
@@ -2708,53 +2715,65 @@ begin
 
         // Determine whether word wrap is enabled for this cell
         var WordWrapEnabled: Boolean;
-        if CellStyle.WordWrapIsSet then begin
-          WordWrapEnabled:=CellStyle.WordWrap;
-        end else begin
+        if CellStyle.WordWrapIsSet then
+          WordWrapEnabled:=CellStyle.WordWrap
+        else
           WordWrapEnabled:=FWordWrap or FColData[i].WordWrap;
-        end;
 
         Canvas.Font.Assign(FCellFont);
-        if CellStyle.FontNameIsSet then begin
-          Canvas.Font.Family:=CellStyle.FontName;
-        end;
-        if CellStyle.FontSizeIsSet then begin
-          Canvas.Font.Size:=CellStyle.FontSize;
-        end;
-        if CellStyle.FontStyleIsSet then begin
-          Canvas.Font.Style:=CellStyle.FontStyle;
-        end;
+        if CellStyle.FontNameIsSet then Canvas.Font.Family:=CellStyle.FontName;
+        if CellStyle.FontSizeIsSet then Canvas.Font.Size:=CellStyle.FontSize;
+        if CellStyle.FontStyleIsSet then Canvas.Font.Style:=CellStyle.FontStyle;
 
         if WordWrapEnabled then begin
           // With WordWrap, measure the width of the longest word
           var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
           var MaxWordWidth:=0.0;
-          for var Word in Words do begin
-            if Word<>'' then begin
+          for var Word in Words do
+            if Word<>'' then
               MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
-            end;
-          end;
-          MaxWidth:=Max(MaxWidth,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
         end else begin
           // Without WordWrap, measure each line
           var Lines:=Text.Split([#13#10]);
-          for var Line in Lines do begin
-            MaxWidth:=Max(MaxWidth,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
-          end;
+          for var Line in Lines do
+            DataW:=Max(DataW,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
         end;
       end;
     end;
 
-    // Add the padding
-    MaxWidth:=MaxWidth+CellPaddingFull;
+    // Decide the column width.
+    //
+    // Default: fit whichever of header / data is wider (header stays 1 line).
+    //
+    // Smart wrap: when the header is much wider than the data - header width
+    // > 50px AND header exceeds data by > 20px - and the header is allowed to
+    // wrap, size the column to the DATA instead and let the caption wrap onto
+    // extra lines (AutoSizeHeaders then grows the height). This keeps wide
+    // multi-word captions from forcing every column unnecessarily wide, while
+    // respecting the designed HeaderWordWrap setting.
+    var TargetW:Single;
+    if CanWrapHdr and (HeaderFullW>50) and (HeaderFullW-DataW>20) then
+      TargetW:=Max(DataW,HeaderWordW)   // wrap header to data; never below widest word
+    else
+      TargetW:=Max(HeaderFullW,DataW);
 
-    // Set the new width
-    var NewWidth:=Trunc(MaxWidth);
-    if NewWidth<FDefaultColWidth then
-      NewWidth:=FDefaultColWidth;
+    // Add the padding
+    TargetW:=TargetW+CellPaddingFull;
+
+    // Floor at the column's own MinWidth (or a small absolute minimum), so a
+    // genuinely narrow column (e.g. a short type/flag field) can autosize
+    // tight instead of being padded out to the global default width.
+    var NewWidth:=Trunc(TargetW);
+    var Floor:=Max(10,FColData[i].MinWidth);
+    if NewWidth<Floor then
+      NewWidth:=Floor;
 
     ColWidths[i]:=NewWidth;
   end;
+
+  // Header heights must follow the (possibly wrap-narrowed) column widths.
+  AutoSizeHeaders;
   Invalidate;
 end;
 
@@ -3949,57 +3968,100 @@ end;
 
 procedure TMultiHeaderGrid.UpdateGroupColumnWidth(StartCol, EndCol: Integer; TotalWidth: Integer);
 var
-  i: Integer;
-  GroupColCount: Integer;
-  NewWidth, RemainingWidth: Integer;
-  ProportionalWidths: array of Integer;
+  i, n           : Integer;
+  GroupColCount  : Integer;
+  Widths         : array of Integer;
+  MinW, MaxW     : array of Integer;
+  FResizeStartWidth: Integer;
 begin
-  if TotalWidth<10*(EndCol-StartCol+1) then
-    TotalWidth:=10*(EndCol-StartCol+1); // Minimum total width
-
   GroupColCount:=EndCol-StartCol+1;
-  SetLength(ProportionalWidths, GroupColCount);
+  if GroupColCount<=0 then Exit;
 
-  // Calculate proportional widths based on the original ratios
-  RemainingWidth:=TotalWidth;
+  SetLength(Widths, GroupColCount);
+  SetLength(MinW,   GroupColCount);
+  SetLength(MaxW,   GroupColCount);
 
-  // First pass: calculate proportional widths
-  var FResizeStartWidth:=ResizeStartWidth;
+  // Effective per-column bounds (at least 10px, honouring Min/MaxWidth).
+  var SumMin:=0;
+  var SumMax:=0;
   for i:=0 to GroupColCount-1 do begin
-    ProportionalWidths[i]:=Round(FResizeStartWidths[i]*TotalWidth/FResizeStartWidth);
-    Dec(RemainingWidth, ProportionalWidths[i]);
+    var Lo:=Max(10, FColData[StartCol+i].MinWidth);
+    var Hi:=FColData[StartCol+i].MaxWidth;
+    if Hi<Lo then Hi:=Lo;
+    MinW[i]:=Lo;
+    MaxW[i]:=Hi;
+    Inc(SumMin, Lo);
+    if SumMax<MaxInt then begin
+      if Hi>=MaxInt-SumMax then SumMax:=MaxInt else Inc(SumMax, Hi);
+    end;
   end;
 
-  // Second pass: distribute the remainder
-  if RemainingWidth<>0 then begin
+  // The achievable total is bounded by the sum of per-column min/max widths.
+  // Clamping the *target* here (rather than letting individual columns clamp
+  // silently) is what keeps the dragged border locked to the mouse: the grid
+  // never claims a width it cannot actually realise.
+  if TotalWidth<SumMin then TotalWidth:=SumMin;
+  if TotalWidth>SumMax then TotalWidth:=SumMax;
+
+  // Start from the proportional distribution of the original widths.
+  FResizeStartWidth:=ResizeStartWidth;
+  if FResizeStartWidth<=0 then FResizeStartWidth:=GroupColCount;
+  for i:=0 to GroupColCount-1 do
+    Widths[i]:=Round(FResizeStartWidths[i]*TotalWidth/FResizeStartWidth);
+
+  // Water-filling: clamp to bounds, measure how far the realised total is from
+  // the (achievable) target, and push the difference one pixel at a time onto
+  // the columns that can still move in that direction. Repeat until the total
+  // matches or every column is pinned. Because TotalWidth was pre-clamped to
+  // [SumMin..SumMax], this always converges and the realised total equals the
+  // target - so the dragged border stays locked to the mouse.
+  for var Pass:=0 to GroupColCount do begin
+    var Cur:=0;
     for i:=0 to GroupColCount-1 do begin
-      if RemainingWidth>0 then begin
-        Inc(ProportionalWidths[i]);
-        Dec(RemainingWidth);
-      end else if RemainingWidth<0 then begin
-        Dec(ProportionalWidths[i]);
-        Inc(RemainingWidth);
-      end else begin
-        Break;
+      Widths[i]:=Min(Max(Widths[i],MinW[i]),MaxW[i]);
+      Inc(Cur, Widths[i]);
+    end;
+
+    var Diff:=TotalWidth-Cur;       // >0 need to grow, <0 need to shrink
+    if Diff=0 then Break;
+
+    // Count columns that can still move the needed way.
+    n:=0;
+    for i:=0 to GroupColCount-1 do
+      if ((Diff>0) and (Widths[i]<MaxW[i])) or
+         ((Diff<0) and (Widths[i]>MinW[i])) then Inc(n);
+    if n=0 then Break;
+
+    // One-pixel-per-movable-column passes until Diff is consumed.
+    var Dir:=Sign(Diff);
+    var Left:=Abs(Diff);
+    i:=0;
+    while (Left>0) do begin
+      if ((Dir>0) and (Widths[i]<MaxW[i])) or
+         ((Dir<0) and (Widths[i]>MinW[i])) then begin
+        Inc(Widths[i], Dir);
+        Dec(Left);
+      end;
+      Inc(i);
+      if i>=GroupColCount then i:=0;
+      // Safety: if nothing movable remains, stop (handled by next Pass too).
+      if Left>0 then begin
+        var AnyMovable:=False;
+        for var k:=0 to GroupColCount-1 do
+          if ((Dir>0) and (Widths[k]<MaxW[k])) or
+             ((Dir<0) and (Widths[k]>MinW[k])) then begin AnyMovable:=True; Break; end;
+        if not AnyMovable then Break;
       end;
     end;
   end;
 
-  // Apply the new widths
-  for i:=StartCol to EndCol do begin
-    NewWidth:=ProportionalWidths[i-StartCol];
-    if NewWidth<10 then
-      NewWidth:=10; // Minimum column width
-
-    ColWidths[i]:=NewWidth;
-  end;
+  // Commit.
+  for i:=0 to GroupColCount-1 do
+    ColWidths[StartCol+i]:=Widths[i];
 
   Invalidate;
-
-  // Update the horizontal scrollbar
-  if Assigned(HScrollBar) then begin
+  if Assigned(HScrollBar) then
     HScrollBar.Value:=FViewLeft;
-  end;
 end;
 
 procedure TMultiHeaderGrid.UpdateColumnWidth(StartCol, EndCol: Integer; NewWidth: Integer);
@@ -4022,6 +4084,11 @@ begin
       HScrollBar.Value:=FViewLeft;
     end;
   end;
+
+  // Narrower columns wrap their captions onto more lines, so the header height
+  // must follow the new widths. Only needed when header word-wrap is in play.
+  if FHeaderWordWrap then
+    AutoSizeHeaders;
 end;
 
 procedure TMultiHeaderGrid.UpdateHeaderRowHeight(ARow: Integer; NewHeight: Integer);
@@ -4675,6 +4742,25 @@ begin
       Exit;
     end;
 
+    // Compute the layout signature (which fields, in what order) BEFORE the
+    // rebuild, so we know whether this is a structural change or a pure
+    // re-apply (e.g. a Min/MaxWidth toggle).
+    var Layout:='';
+    for var i:=0 to High(Fields) do
+      Layout:=Layout+Fields[i].FieldName+';';
+    var LayoutChanged:=Layout<>FLastColLayout;
+    FLastColLayout:=Layout;
+
+    // Preserve the current header row heights so a non-structural rebuild does
+    // not flatten them back to the fixed build-time default (which made every
+    // header row the same size when the Limit-widths checkbox was toggled).
+    var SavedHeights: TArray<Integer>;
+    if not LayoutChanged then begin
+      SetLength(SavedHeights, FHeaderLevels.Count);
+      for var i:=0 to FHeaderLevels.Count-1 do
+        SavedHeights[i]:=FHeaderLevels[i].Height;
+    end;
+
     BuildGroupedHeader(Fields, Cols);
 
     // Apply per-column geometry/alignment taken from the Columns
@@ -4684,14 +4770,28 @@ begin
       for var i:=0 to ColCount-1 do begin
         var Col:=Cols[i];
         if Col=nil then Continue;
-        if Col.Width>0 then ColWidths[i]:=Col.Width;
+        // Initial width only on a fresh/changed layout; otherwise the live
+        // (user-dragged) width stands.
+        if LayoutChanged and (Col.Width>0) then ColWidths[i]:=Col.Width;
         if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
         if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
+        // When a column drops its limits (Min/Max back to 0), restore the
+        // permissive defaults so a previously clamped width can grow again.
+        if Col.MinWidth<=0 then ColMinWidth[i]:=0;
+        if Col.MaxWidth<=0 then ColMaxWidth[i]:=MaxInt;
         ColWordWrap[i]:=Col.WordWrap;
         ColTextHAlignment[i]:=Col.Alignment;
         ColTextVAlignment[i]:=Col.VertAlignment;
       end;
     end;
+
+    if LayoutChanged then
+      // Fresh structure: fit header heights to the new captions/widths.
+      AutoSizeHeaders
+    else
+      // Pure re-apply: keep the header heights exactly as they were.
+      for var i:=0 to Min(High(SavedHeights),FHeaderLevels.Count-1) do
+        FHeaderLevels[i].Height:=SavedHeights[i];
 
     UpdateRowCount;
   finally
