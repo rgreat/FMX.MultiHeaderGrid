@@ -420,9 +420,9 @@ type
     procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
                             Shift: TShiftState);
     procedure EditorExit(Sender: TObject);
-    // Strips the TMemo's painted border/background so the inplace editor
+    // Strips control from painted border/background so the inplace editor
     // blends seamlessly into the cell.
-    procedure EditorApplyStyle(Sender: TObject);
+    procedure ApplyStyle(Sender: TObject);
   protected
     // --- Inplace editor extensibility hooks -----------------------------
     // The base/string grids always edit through the shared TMemo (FEditor).
@@ -3940,23 +3940,19 @@ begin
   FEditor.DisableMouseWheel:=True;
   FEditor.OnKeyDown:=EditorKeyDown;
   FEditor.OnExit:=EditorExit;
-  FEditor.OnApplyStyleLookup:=EditorApplyStyle;
+  FEditor.OnApplyStyleLookup:=ApplyStyle;
   FEditor.TextSettings.HorzAlign:=TextAlign;
 end;
 
-procedure TMultiHeaderGrid.EditorApplyStyle(Sender: TObject);
+procedure TMultiHeaderGrid.ApplyStyle(Sender: TObject);
 var
   Obj: TFmxObject;
 begin
-  // Hide the TMemo's styled background entirely (this is what paints the
+  // Hide the styled background entirely (this is what paints the
   // border). The opaque FEditorBack rectangle supplies the fill instead.
-  if FEditor=nil then Exit;
+  if not Assigned(Sender) or not (Sender is TStyledControl) then Exit;
 
-  Obj:=FEditor.FindStyleResource('background');
-  if Obj is TControl then
-    TControl(Obj).Opacity:=0;
-
-  Obj:=FEditor.FindStyleResource('frame');
+  Obj:=TStyledControl(Sender).FindStyleResource('background');
   if Obj is TControl then
     TControl(Obj).Visible:=False;
 end;
