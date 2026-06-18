@@ -287,7 +287,7 @@ procedure TForm1.InitDBGrid(Grid: TMultiHeaderDBGrid);
 begin
   var Columns:=Grid.Columns;
 
-  Columns.Clear;
+  CDS.LoadFromFile('example.xml');
 
   Columns.SetColumnProps('id',       'Internal'#13#10'identifier');
 
