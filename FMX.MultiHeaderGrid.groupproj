@@ -3,13 +3,13 @@
         <ProjectGuid>{2029C772-1669-40A4-828E-BA49AFD80B1A}</ProjectGuid>
     </PropertyGroup>
     <ItemGroup>
-        <Projects Include="..\MultiHeaderGrid.dproj">
+        <Projects Include="MultiHeaderGrid.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj">
+        <Projects Include="MultiHeaderGridDsgn.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="Test.dproj">
+        <Projects Include="Test\Test.dproj">
             <Dependencies/>
         </Projects>
     </ItemGroup>
@@ -21,31 +21,31 @@
         </BorlandProject>
     </ProjectExtensions>
     <Target Name="MultiHeaderGrid">
-        <MSBuild Projects="..\MultiHeaderGrid.dproj"/>
+        <MSBuild Projects="MultiHeaderGrid.dproj"/>
     </Target>
     <Target Name="MultiHeaderGrid:Clean">
-        <MSBuild Projects="..\MultiHeaderGrid.dproj" Targets="Clean"/>
+        <MSBuild Projects="MultiHeaderGrid.dproj" Targets="Clean"/>
     </Target>
     <Target Name="MultiHeaderGrid:Make">
-        <MSBuild Projects="..\MultiHeaderGrid.dproj" Targets="Make"/>
+        <MSBuild Projects="MultiHeaderGrid.dproj" Targets="Make"/>
     </Target>
     <Target Name="MultiHeaderGridDsgn">
-        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj"/>
+        <MSBuild Projects="MultiHeaderGridDsgn.dproj"/>
     </Target>
     <Target Name="MultiHeaderGridDsgn:Clean">
-        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj" Targets="Clean"/>
+        <MSBuild Projects="MultiHeaderGridDsgn.dproj" Targets="Clean"/>
     </Target>
     <Target Name="MultiHeaderGridDsgn:Make">
-        <MSBuild Projects="d:\Work\_gis_libs\FMX.MultiHeaderGrid\MultiHeaderGridDsgn.dproj" Targets="Make"/>
+        <MSBuild Projects="MultiHeaderGridDsgn.dproj" Targets="Make"/>
     </Target>
     <Target Name="Test">
-        <MSBuild Projects="Test.dproj"/>
+        <MSBuild Projects="Test\Test.dproj"/>
     </Target>
     <Target Name="Test:Clean">
-        <MSBuild Projects="Test.dproj" Targets="Clean"/>
+        <MSBuild Projects="Test\Test.dproj" Targets="Clean"/>
     </Target>
     <Target Name="Test:Make">
-        <MSBuild Projects="Test.dproj" Targets="Make"/>
+        <MSBuild Projects="Test\Test.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
         <CallTarget Targets="MultiHeaderGrid;MultiHeaderGridDsgn;Test"/>
