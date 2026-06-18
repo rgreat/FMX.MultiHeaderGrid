@@ -5,7 +5,7 @@ interface
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
-  FMX.Memo, FMX.ScrollBox, FMX.ListBox, FMX.DateTimeCtrls, FMX.Edit, FMX.EditBox,
+  FMX.Memo, FMX.ListBox, FMX.DateTimeCtrls, FMX.Edit, FMX.EditBox,
   FMX.NumberBox, FMX.Text, Data.DB;
 
 type
@@ -148,7 +148,6 @@ type
     procedure SetStyle(const Value: TCellStyle);
   public
     constructor Create(HeaderLevel: THeaderLevel);
-    destructor Destroy; reintroduce;
 
     property Caption: string read FCaption write SetCaption;
 
@@ -741,7 +740,6 @@ type
     procedure DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle); override;
   public
     constructor Create(AOwner: TComponent); override;
-    destructor Destroy; override;
   end;
 
   TMultiHeaderDBGrid = class;
@@ -1004,11 +1002,6 @@ begin
   FColSpan:=1;
   FRowSpan:=1;
   HeaderLevel.Add(Self);
-end;
-
-destructor THeaderElement.Destroy;
-begin
-  inherited;
 end;
 
 procedure THeaderElement.SetCaption(const Value: string);
@@ -4456,11 +4449,6 @@ end;
 { TMultiHeaderStringGrid }
 
 constructor TMultiHeaderStringGrid.Create(AOwner: TComponent);
-begin
-  inherited;
-end;
-
-destructor TMultiHeaderStringGrid.Destroy;
 begin
   inherited;
 end;

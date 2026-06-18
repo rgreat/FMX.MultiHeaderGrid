@@ -320,7 +320,7 @@ begin
     if Field=nil then Continue;
 
     case Field.DataType of
-      ftWideString: HMGColumn.Color:=TAlphaColorRec.Cornsilk;
+      ftWideString: HMGColumn.Color:=$FFFFF8DC;
       ftInteger:    HMGColumn.Color:=$FFB3FFFF;
       ftBoolean:    HMGColumn.Color:=$FFFFF6C7;
       ftTimeStamp:  HMGColumn.Color:=$FFE5FFCA;
