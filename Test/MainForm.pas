@@ -556,10 +556,12 @@ end;
 procedure TForm1.GridSelectCell(Sender: TObject);
 begin
   var Grid:=ActiveGrid;
-  StatusText.Text:=Format('Selected Cell: [%d, %d, Left:%d, Top: %d], ViewLeft: %d, ViewTop: %d, ViewBottom: %d',
+  var Rect:=Grid.GetCellRect(Grid.SelectedCell.X,Grid.SelectedCell.Y);
+  StatusText.Text:=Format('Selected Cell: [%d, %d, Left:%d, Top: %d], ViewLeft: %d, ViewTop: %d, ViewBottom: %d. CellRect: [%f, %f, %f, %f]',
                           [Grid.SelectedCell.X, Grid.SelectedCell.Y,
                            Grid.ColLefts[Grid.SelectedCell.X],Grid.RowTops[Grid.SelectedCell.Y],
-                           Grid.ViewLeft,Grid.ViewTop,Grid.ViewBottom]);
+                           Grid.ViewLeft,Grid.ViewTop,Grid.ViewBottom,
+                           Rect.Left,Rect.Top,Rect.Width,Rect.Height]);
 end;
 
 procedure TForm1.GridGridScroll(Sender: TObject; Left, Top: Integer);
