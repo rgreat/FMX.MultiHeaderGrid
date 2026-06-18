@@ -2,6 +2,10 @@ Lightweight Delphi FMX VCL-like Grid.
 
 Support headers, merged cells and styles.  
 
+> [!CAUTION]
+> **Work in progress**
+> Component is in development. Expect heavy refactoring and broken features.
+
 **TMultiHeaderDBGrid** - show grid from TDataSource (from TDataSet).  
  
 ![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/Images/TMultiHeaderDBGrid.png)
