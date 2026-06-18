@@ -5,7 +5,8 @@ interface
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
-  FMX.Memo, FMX.ScrollBox, FMX.ListBox, FMX.DateTimeCtrls, Data.DB;
+  FMX.Memo, FMX.ScrollBox, FMX.ListBox, FMX.DateTimeCtrls, FMX.Edit, FMX.EditBox,
+  FMX.NumberBox, FMX.Text, Data.DB;
 
 type
 
@@ -16,8 +17,9 @@ type
   // bound field's DataType / FieldKind. See TMultiHeaderDBGrid.EditorKindForField.
   TMHGEditorKind = (
     ekNone,      // not editable (binary/structured/calculated/read-only)
-    ekMemo,      // TMemo - text + numeric, value round-trips via Field.AsString
-    ekCheckBox,  // TCheckBox - ftBoolean
+    ekMemo,      // TMemo - text fields, value round-trips via Field.AsString
+    ekNumber,    // TNumberBox - integer / float fields (integer vs decimal mode)
+    ekCheckBox,  // ftBoolean - toggled in place (no editor control)
     ekComboBox,  // TComboBox - lookup fields (fkLookup)
     ekDate,      // TDateEdit - ftDate
     ekTime,      // TTimeEdit - ftTime
@@ -388,7 +390,8 @@ type
       FEditorHost: TLayout;
       // Currently active inplace editor control. For the base/string grids
       // this is always FEditor (the TMemo). The DB grid may swap in a typed
-      // control (TCheckBox/TComboBox/TDateEdit/TTimeEdit/...) per field type.
+      // control (TComboBox/TDateEdit/TTimeEdit/...) per field type. (Boolean
+      // fields use no editor - they toggle in place.)
       FActiveEditor: TControl;
       FEditing: Boolean;
       FEditCol: Integer;
@@ -425,7 +428,8 @@ type
     // --- Inplace editor extensibility hooks -----------------------------
     // The base/string grids always edit through the shared TMemo (FEditor).
     // The DB grid overrides these to select a typed editor control per field
-    // (TMemo / TCheckBox / TComboBox / TDateEdit / TTimeEdit / composite).
+    // (TMemo / TComboBox / TDateEdit / TTimeEdit / composite). Boolean fields
+    // are not edited through a control - they toggle in place.
     //
     // PrepareCellEditor: choose/create the control for (ACol,ARow), parent it,
     // wire OnKeyDown/OnExit, and return it. Base returns the shared TMemo.
@@ -440,6 +444,10 @@ type
     function  CommitEditorValue(ACol, ARow: Integer): Boolean; virtual;
     // Active editor control (FActiveEditor, or the TMemo as a fallback).
     function  ActiveEditorControl: TControl; virtual;
+    // After the editor is shown, place the caret at the end of its text (no
+    // selection). Base handles the shared TMemo; descendants override for
+    // their own typed editors.
+    procedure PlaceEditorCaretAtEnd(Ed: TControl); virtual;
     // Minimum column width (px) the chosen editor needs to be usable for the
     // cell at (ACol,ARow). 0 means "no requirement" (the memo wraps/scrolls
     // and is fine in a narrow column). StartCellEditing widens the column to
@@ -448,6 +456,21 @@ type
     function  EditorMinColWidth(ACol, ARow: Integer): single; virtual;
     procedure SetReadOnly(const Value: Boolean);
     function  CanEditCell(ACol, ARow: Integer): Boolean; virtual;
+    // Boolean (toggle) cells are not edited through an inplace control: they
+    // flip in place on a click / Space / Enter. CellIsToggle reports such a
+    // cell; ToggleCell flips its value and persists it. The base grid has no
+    // such cells (both are no-ops); TMultiHeaderDBGrid overrides them for
+    // ftBoolean fields.
+    function  CellIsToggle(ACol, ARow: Integer): Boolean; virtual;
+    function  ToggleCell(ACol, ARow: Integer): Boolean; virtual;
+    // Glyph rectangle for a toggle cell's checkbox, shared by drawing and
+    // mouse hit-testing so a click on the box (vs. around it) is detected
+    // consistently with what is painted.
+    function  ToggleGlyphRect(ACol, ARow: Integer; const ARect: TRectF): TRectF; virtual;
+    // Paints the built-in checkbox glyph for a toggle cell. Self-contained
+    // (vector drawing, no image list). Descendants may override to restyle.
+    procedure DrawToggleCell(Canvas: TCanvas; ACol, ARow: Integer;
+                             const ARect: TRectF; IsSelected, AChecked: Boolean); virtual;
     procedure SetRowCount(Value: Integer);
     procedure SetColCount(Value: Integer);
     procedure SetDefaultColWidth(const Value: integer);
@@ -844,8 +867,10 @@ type
       // --- Typed inplace editor controls --------------------------------
       // Created lazily, reused across edits. Only one is active at a time
       // (selected per field type); the active one is FActiveEditor.
-      FBoolEditor : TCheckBox;
+      // Boolean fields use no editor control - they toggle in place
+      // (see CellIsToggle / ToggleCell).
       FComboEditor: TComboBox;
+      FNumberEditor: TNumberBox;
       FDateEditor : TDateEdit;
       FTimeEditor : TTimeEdit;
       // For ftDateTime the date control hosts the time control beside it; the
@@ -882,6 +907,9 @@ type
     procedure DoSelectCell; override;
     // Data-bound inplace editing: a typed editor is chosen per field.
     function CanEditCell(ACol, ARow: Integer): Boolean; override;
+    // Boolean fields toggle in place instead of opening an editor.
+    function CellIsToggle(ACol, ARow: Integer): Boolean; override;
+    function ToggleCell(ACol, ARow: Integer): Boolean; override;
     // --- Typed editor overrides (see base hooks) ------------------------
     function  PrepareCellEditor(ACol, ARow: Integer): TControl; override;
     procedure PositionEditor; override;
@@ -889,16 +917,24 @@ type
     procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); override;
     function  GetEditorText: string; override;
     function  CommitEditorValue(ACol, ARow: Integer): Boolean; override;
+    procedure PlaceEditorCaretAtEnd(Ed: TControl); override;
     function  EditorMinColWidth(ACol, ARow: Integer): single; override;
     // Field bound to a given grid column (nil if out of range / no dataset).
     function  FieldForCol(ACol: Integer): TField;
     // Editor kind for a field, from DataType / FieldKind / ReadOnly.
     function  EditorKindForField(Field: TField): TMHGEditorKind;
+    // True for whole-number field types (drives the number editor's integer
+    // vs decimal mode).
+    function  FieldIsInteger(Field: TField): Boolean;
+    // Min/Max range the number editor should allow for a field's data type.
+    procedure NumberRangeForField(Field: TField; out AMin, AMax: Double);
     // The Columns collection item that drives a given field (matched by
     // FieldName), or nil if the field isn't bound to a column.
     function  ColumnForField(Field: TField): TMHGColumn;
     // Lazily create & wire the typed editor controls.
     procedure EnsureTypedEditors;
+    // OnApplyStyleLookup for the number editor: hides its spin buttons.
+    procedure NumberEditorApplyStyle(Sender: TObject);
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -2122,6 +2158,17 @@ begin
 
   DoDrawCell(ACol, ARow, Canvas, ARect, IsSelected, Text, Handled);
 
+  // Built-in checkbox glyph for boolean (toggle) cells, unless a user
+  // OnDrawCell handler already drew the cell.
+  if not Handled then begin
+    var MC2: TMergedCell;
+    if (not IsMergedCell(ACol, ARow, MC2)) and CellIsToggle(ACol, ARow) then begin
+      DrawToggleCell(Canvas, ACol, ARow, ARect, IsSelected,
+                     SameText(Text, 'True') or (Text='1'));
+      Handled:=True;
+    end;
+  end;
+
   if not Handled then begin
     var CellStyle:=CellStyle[ACol, ARow];
 
@@ -3231,10 +3278,21 @@ begin
         Rect:=GetCellRect(i, j);
         if Rect.Contains(PointF(X, Y)) then begin
           FLastClickIsOnCell:=True;
+          // Remember whether the click landed on the checkbox glyph BEFORE
+          // selection changes the row. Clicking on the box toggles; clicking
+          // anywhere else in the cell only selects.
+          var HitToggle:=CellIsToggle(i, j) and
+                         ToggleGlyphRect(i, j, Rect).Contains(PointF(X, Y));
+
           FSelectedCell:=Point(i, j);
           DoCellClick(FSelectedCell.X, FSelectedCell.Y);
           ScrollToSelectedCell;
+          // Move the dataset cursor to the clicked row first, so the toggle
+          // acts on the correct record (and the right row gets selected).
           DoSelectCell;
+
+          if HitToggle then
+            ToggleCell(i, j);
           Exit;
         end;
       end;
@@ -3378,11 +3436,20 @@ begin
         DY:=Trunc(ViewCellsHeight/DefaultRowHeight);
       end;
       vkReturn: begin // Enter
-        if CanEditCell(FSelectedCell.X, FSelectedCell.Y) then
+        if CellIsToggle(FSelectedCell.X, FSelectedCell.Y) then
+          ToggleCell(FSelectedCell.X, FSelectedCell.Y)
+        else if CanEditCell(FSelectedCell.X, FSelectedCell.Y) then
           StartCellEditing(FSelectedCell.X, FSelectedCell.Y, #0)
         else
           DoCellClick(FSelectedCell.X, FSelectedCell.Y);
         Exit;
+      end;
+      vkSpace: begin // Space toggles a boolean cell
+        if CellIsToggle(FSelectedCell.X, FSelectedCell.Y) then begin
+          ToggleCell(FSelectedCell.X, FSelectedCell.Y);
+          KeyChar:=#0;
+          Exit;
+        end;
       end;
       vkEscape: begin
         FSelectedCell:=Point(-1, -1);
@@ -3433,14 +3500,26 @@ begin
 
   // F2 edits the current cell's existing content.
   if IsFocused and (Key=vkF2) then begin
-    StartCellEditing(FSelectedCell.X, FSelectedCell.Y, #0);
+    if CellIsToggle(FSelectedCell.X, FSelectedCell.Y) then
+      ToggleCell(FSelectedCell.X, FSelectedCell.Y)
+    else
+      StartCellEditing(FSelectedCell.X, FSelectedCell.Y, #0);
     Key:=0;
     Exit;
   end;
 
-  // Handle text input
+  // Handle text input (never enters edit mode on a toggle/boolean cell).
+  // Space on a toggle cell flips it (the vkSpace case above doesn't fire on
+  // platforms that deliver space only as KeyChar=' ' with Key=0).
   if IsFocused and (KeyChar>=' ') and (KeyChar<='~') and not (ssCtrl in Shift) then begin
-    StartCellEditing(FSelectedCell.X, FSelectedCell.Y, KeyChar);
+    if CellIsToggle(FSelectedCell.X, FSelectedCell.Y) then begin
+      if KeyChar=' ' then
+        ToggleCell(FSelectedCell.X, FSelectedCell.Y);
+    end else begin
+      // A keystroke opens the editor. Editors that can use the char (text /
+      // number) seed it; others (date/time) ignore it in LoadEditorValue.
+      StartCellEditing(FSelectedCell.X, FSelectedCell.Y, KeyChar);
+    end;
     KeyChar:=#0;
   end;
 end;
@@ -3535,6 +3614,86 @@ procedure TMultiHeaderGrid.DoCellClick(ACol, ARow: Integer);
 begin
   if Assigned(FOnCellClick) then
     FOnCellClick(Self);
+end;
+
+function TMultiHeaderGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
+begin
+  // The plain grid has no toggle cells; the DB grid overrides for ftBoolean.
+  Result:=False;
+end;
+
+function TMultiHeaderGrid.ToggleCell(ACol, ARow: Integer): Boolean;
+begin
+  Result:=False;
+end;
+
+function TMultiHeaderGrid.ToggleGlyphRect(ACol, ARow: Integer; const ARect: TRectF): TRectF;
+const
+  BoxSize = 13; // nominal glyph size (px); clamped to the cell
+begin
+  // Centered square box, clamped so it always fits the cell.
+  var S:=Min(BoxSize, Min(ARect.Width, ARect.Height)-2);
+  if S<6 then S:=Min(ARect.Width, ARect.Height);
+  Result:=TRectF.Create(0, 0, S, S);
+  Result.Offset(ARect.Left+(ARect.Width-S)/2, ARect.Top+(ARect.Height-S)/2);
+end;
+
+procedure TMultiHeaderGrid.DrawToggleCell(Canvas: TCanvas; ACol, ARow: Integer;
+  const ARect: TRectF; IsSelected, AChecked: Boolean);
+begin
+  // Cell background (matches the regular fill / selection highlight).
+  if IsSelected then
+    Canvas.Fill.Color:=FSelectedCellColor
+  else
+    Canvas.Fill.Color:=FCellColor;
+  Canvas.FillRect(ARect, 0, 0, AllCorners, 1);
+
+  var Box:=ToggleGlyphRect(ACol, ARow, ARect);
+  var S:=Box.Width;
+
+  // Selected state is made distinct: a thicker, darker (blue) box outline.
+  var BorderColor: TAlphaColor;
+  var BorderW: Single;
+  if IsSelected then begin
+    BorderColor:=TAlphaColors.Royalblue;
+    BorderW:=2;
+  end else begin
+    BorderColor:=TAlphaColors.Gray;
+    BorderW:=1;
+  end;
+
+  if AChecked then begin
+    // Checked: filled box (blue when selected, sea-green otherwise) with a
+    // white check mark - clearly readable at the smaller glyph size.
+    if IsSelected then
+      Canvas.Fill.Color:=TAlphaColors.Royalblue
+    else
+      Canvas.Fill.Color:=TAlphaColors.Seagreen;
+    Canvas.FillRect(Box, 2, 2, AllCorners, 1);
+
+    Canvas.Stroke.Kind:=TBrushKind.Solid;
+    Canvas.Stroke.Thickness:=BorderW;
+    Canvas.Stroke.Color:=BorderColor;
+    Canvas.DrawRect(Box, 2, 2, AllCorners, 1);
+
+    Canvas.Stroke.Color:=TAlphaColors.White;
+    Canvas.Stroke.Thickness:=Max(1.5, S/7);
+    Canvas.Stroke.Cap:=TStrokeCap.Round;
+    var P1:=PointF(Box.Left+S*0.22, Box.Top+S*0.52);
+    var P2:=PointF(Box.Left+S*0.42, Box.Top+S*0.72);
+    var P3:=PointF(Box.Left+S*0.78, Box.Top+S*0.26);
+    Canvas.DrawLine(P1, P2, 1);
+    Canvas.DrawLine(P2, P3, 1);
+    Canvas.Stroke.Cap:=TStrokeCap.Flat;
+  end else begin
+    // Unchecked: white interior + outline.
+    Canvas.Fill.Color:=TAlphaColors.White;
+    Canvas.FillRect(Box, 2, 2, AllCorners, 1);
+    Canvas.Stroke.Kind:=TBrushKind.Solid;
+    Canvas.Stroke.Thickness:=BorderW;
+    Canvas.Stroke.Color:=BorderColor;
+    Canvas.DrawRect(Box, 2, 2, AllCorners, 1);
+  end;
 end;
 
 procedure TMultiHeaderGrid.DoHeaderClick(ALevel, ACol: Integer);
@@ -3885,14 +4044,8 @@ begin
     Exit;
   end;
 
-  if Ed is TCheckBox then begin
-    // TCheckBox must be in center
-    Ed.Position.X:=(R.Left+R.Right-Ed.Width)/2;
-    Ed.Position.Y:=(R.Top+R.Bottom-Ed.Height)/2;
-  end else begin
-    Ed.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4,
-                 R.Width-FGridLineWidth/2, R.Height-FGridLineWidth/2);
-  end;
+  Ed.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4,
+               R.Width-FGridLineWidth/2, R.Height-FGridLineWidth/2);
 
 
   // Match the cell font (only controls that expose TextSettings).
@@ -3948,12 +4101,6 @@ begin
   FEditRow:=ARow;
   FEditing:=True;
 
-  if InitialChar>=' ' then
-    FEditor.Text:=InitialChar          // typing replaces the cell content
-  else
-    FEditor.Text:=Cells[ACol,ARow];    // F2 / double-click edits existing text
-  if FEditing then CommitEditing;
-
   // Let the (overridable) factory pick/create the editor control for this
   // cell. Base returns the shared TMemo; the DB grid may return a typed one.
   var Ed:=PrepareCellEditor(ACol, ARow);
@@ -3996,7 +4143,15 @@ begin
   Ed.BringToFront;
   if Ed.CanFocus then
     Ed.SetFocus;
-  // Caret to end (text editors only).
+  // Place the caret at the end of the editor's text (no selection), both when
+  // entering with the existing value and when a typed char seeded it.
+  PlaceEditorCaretAtEnd(Ed);
+end;
+
+procedure TMultiHeaderGrid.PlaceEditorCaretAtEnd(Ed: TControl);
+begin
+  // Base grid only has the shared TMemo. Descendants override to handle their
+  // own typed editors (see TMultiHeaderDBGrid).
   if Ed is TMemo then
     TMemo(Ed).GoToTextEnd;
 end;
@@ -4007,27 +4162,17 @@ begin
   FEditing:=False; // clear first so EditorExit re-entry is a no-op
   var Col:=FEditCol;
   var Row:=FEditRow;
-  var NewText:=FEditor.Text;
   if FEditorHost<>nil then FEditorHost.Visible:=False;
-
-  if (Col>=0) and (Col<FColCount) and (Row>=0) and (Row<FRowCount) then
-    if Cells[Col,Row]<>NewText then begin
-      Cells[Col,Row]:=NewText; // SetCells fires OnSetCellText / invalidates
-      // The new content may need more (or fewer) lines, so re-fit the row
-      // height. A merged cell spans several rows - autosize that whole range.
-      var MergedCell: TMergedCell;
-      if IsMergedCell(Col,Row,MergedCell) then
-        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, True)
-      else
-        AutoSizeRows(Row, Row, True);
-      UpdateSize; // total height changed -> refresh scrollbar range
-    end;
 
   var Ed:=ActiveEditorControl;
   if Ed<>nil then Ed.Visible:=False;
 
-  // Persist via the (overridable) hook. The DB grid writes a typed value to
-  // the field with its own try/except guard; the base writes Cells[].
+  // Single persistence point. The base writes the editor text into Cells[]
+  // (which fires DoSetCellText); the DB grid override assigns the bound field
+  // with the correct type under its own try/except guard. (Previously the
+  // memo text was ALSO pushed through Cells[] here, which double-wrote and,
+  // for a typed editor, forced an unparsed string into a numeric/datetime
+  // field - raising on commit.)
   CommitEditorValue(Col, Row);
 
   FActiveEditor:=nil;
@@ -5679,16 +5824,59 @@ begin
           Result:=ekDateTime;
       end;
 
-    // Whitelisted text + numeric types: edit as text through a TMemo and
-    // round-trip via Field.AsString (guarded by try/except at commit).
+    // Whitelisted text types: edit as text through a TMemo and round-trip
+    // via Field.AsString (guarded by try/except at commit).
     ftString, ftWideString, ftFixedChar, ftFixedWideChar, ftGuid,
-    ftMemo, ftWideMemo, ftFmtMemo, ftOraClob,
+    ftMemo, ftWideMemo, ftFmtMemo, ftOraClob:
+      Result:=ekMemo;
+
+    // Numeric types: edited through a dedicated TNumberBox (integer mode for
+    // whole-number fields, decimal mode for floating/scaled fields).
     ftSmallint, ftInteger, ftWord, ftLargeint, ftLongWord, ftShortint, ftByte,
     ftFloat, ftCurrency, ftBCD, ftFMTBcd, ftSingle, ftExtended:
-      Result:=ekMemo;
+      Result:=ekNumber;
   else
     // BLOB / binary / structured / cursor / array / stream etc. - no editor.
     Result:=ekNone;
+  end;
+end;
+
+function TMultiHeaderDBGrid.FieldIsInteger(Field: TField): Boolean;
+// Whole-number field types -> the number editor runs in integer mode.
+begin
+  Result:=(Field<>nil) and
+          (Field.DataType in [ftSmallint, ftInteger, ftWord, ftLargeint,
+                              ftLongWord, ftShortint, ftByte]);
+end;
+
+procedure TMultiHeaderDBGrid.NumberRangeForField(Field: TField; out AMin, AMax: Double);
+// Min/Max the number editor should allow for a given field's data type, so it
+// never clamps a valid stored value. For float/64-bit types a wide finite
+// range is used (TNumberBox.Min/Max are Double).
+const
+  // A wide but finite range for floating-point fields. Large enough for any
+  // realistic stored value while staying well clear of Double's precision
+  // limits and any infinity handling in the control.
+  FLOAT_LIMIT = 1.0E15;
+begin
+  AMin:=-FLOAT_LIMIT;
+  AMax:= FLOAT_LIMIT;
+  if Field=nil then Exit;
+
+  case Field.DataType of
+    ftByte:     begin AMin:=0;          AMax:=255;         end;
+    ftShortint: begin AMin:=-128;       AMax:=127;         end;
+    ftWord:     begin AMin:=0;          AMax:=65535;       end;
+    ftSmallint: begin AMin:=-32768;     AMax:=32767;       end;
+    ftLongWord: begin AMin:=0;          AMax:=4294967295;  end;
+    ftInteger:  begin AMin:=-2147483648; AMax:=2147483647; end;
+    // 64-bit integers exceed Double's exact-integer range; use the wide
+    // finite limit rather than the exact (unrepresentable) Int64 bounds.
+    ftLargeint: begin AMin:=-FLOAT_LIMIT; AMax:=FLOAT_LIMIT; end;
+  else
+    // ftFloat / ftCurrency / ftBCD / ftFMTBcd / ftSingle / ftExtended.
+    AMin:=-FLOAT_LIMIT;
+    AMax:= FLOAT_LIMIT;
   end;
 end;
 
@@ -5712,14 +5900,20 @@ procedure TMultiHeaderDBGrid.EnsureTypedEditors;
   end;
 
 begin
-  if FBoolEditor=nil then begin
-    FBoolEditor:=TCheckBox.Create(Self);
-    FBoolEditor.Width:=16;
-    WireCommon(FBoolEditor);
-  end;
   if FComboEditor=nil then begin
     FComboEditor:=TComboBox.Create(Self);
     WireCommon(FComboEditor);
+  end;
+  if FNumberEditor=nil then begin
+    FNumberEditor:=TNumberBox.Create(Self);
+    // Plain numeric box: disable mouse-drag increments and hide the spin
+    // up/down buttons (done in NumberEditorApplyStyle, which finds the button
+    // style resources - portable across Delphi versions). Value mode (integer
+    // vs decimal) and decimal digits are set per field in LoadEditorValue.
+    FNumberEditor.HorzIncrement:=0;
+    FNumberEditor.VertIncrement:=0;
+    FNumberEditor.OnApplyStyleLookup:=NumberEditorApplyStyle;
+    WireCommon(FNumberEditor);
   end;
   if FDateEditor=nil then begin
     FDateEditor:=TDateEdit.Create(Self);
@@ -5734,6 +5928,32 @@ begin
     FTimeEditor.Format:='HH:nn:ss';
     WireCommon(FTimeEditor);
   end;
+end;
+
+procedure TMultiHeaderDBGrid.NumberEditorApplyStyle(Sender: TObject);
+
+  // Hide a spin-button style sub-control by name, if present.
+  procedure HideButton(Ctrl: TStyledControl; const AName: string);
+  begin
+    var Obj:=Ctrl.FindStyleResource(AName);
+    if Obj is TControl then
+      TControl(Obj).Visible:=False;
+  end;
+
+begin
+  // The TNumberBox spin arrows are style sub-controls; their names vary a
+  // little across themes/versions, so hide every known variant. Missing ones
+  // are simply skipped, leaving a plain numeric edit box.
+  if not (Sender is TStyledControl) then Exit;
+  var Ctrl:=TStyledControl(Sender);
+  HideButton(Ctrl, 'plusbutton');
+  HideButton(Ctrl, 'minusbutton');
+  HideButton(Ctrl, 'upbutton');
+  HideButton(Ctrl, 'downbutton');
+  HideButton(Ctrl, 'spinup');
+  HideButton(Ctrl, 'spindown');
+  HideButton(Ctrl, 'buttonsbox');   // some themes group both arrows here
+  HideButton(Ctrl, 'updownbuttons');
 end;
 
 function TMultiHeaderDBGrid.EditorMinColWidth(ACol, ARow: Integer): single;
@@ -5755,7 +5975,7 @@ begin
     ekTime:     Result:=MINW_TIME+FGridLineWidth/2;
     ekDateTime: Result:=MINW_DATETIME+FGridLineWidth/2;
   else
-    Result:=0; // ekMemo / ekCheckBox / ekNone
+    Result:=0; // ekMemo / ekNumber / ekCheckBox / ekNone
   end;
 end;
 
@@ -5768,8 +5988,77 @@ begin
   var Field:=FieldForCol(ACol);
   if Field=nil then Exit;
 
-  // Editable only when a typed editor exists for this field's datatype.
-  Result:=EditorKindForField(Field)<>ekNone;
+  // Editable through an inplace editor only when a typed editor exists.
+  // Boolean fields are NOT edited this way - they toggle in place
+  // (CellIsToggle / ToggleCell), so they are excluded here.
+  var Kind:=EditorKindForField(Field);
+  Result:=(Kind<>ekNone) and (Kind<>ekCheckBox);
+end;
+
+function TMultiHeaderDBGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
+begin
+  Result:=False;
+  if FReadOnly then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+
+  var Field:=FieldForCol(ACol);
+  Result:=(Field<>nil) and (EditorKindForField(Field)=ekCheckBox);
+end;
+
+function TMultiHeaderDBGrid.ToggleCell(ACol, ARow: Integer): Boolean;
+// Flips a boolean field's value in place and posts it, with the same
+// off-row navigation / bookmark handling used by CommitEditorValue.
+var
+  DS: TDataSet;
+  Field: TField;
+
+  procedure ApplyToCurrentRecord;
+  begin
+    if not (DS.State in [dsEdit, dsInsert]) then DS.Edit;
+    try
+      Field.AsBoolean:=not Field.AsBoolean;
+      DS.Post;
+    except
+      DS.Cancel;
+      raise;
+    end;
+  end;
+
+begin
+  Result:=False;
+  Field:=FieldForCol(ACol);
+  if Field=nil then Exit;
+  if Field.ReadOnly then Exit;
+
+  DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+
+  try
+    if ARow=DS.RecNo-1 then
+      ApplyToCurrentRecord
+    else begin
+      DS.DisableControls;
+      try
+        var Bookmark:=DS.Bookmark;
+        try
+          DS.RecNo:=ARow+1;
+          ApplyToCurrentRecord;
+        finally
+          if DS.BookmarkValid(Bookmark) then
+            DS.Bookmark:=Bookmark;
+        end;
+      finally
+        DS.EnableControls;
+      end;
+    end;
+    Result:=True;
+  except
+    Result:=False;
+  end;
+
+  // The cached row text is now stale - drop it so DoGetCellText re-reads.
+  FCellTexts.Remove(ARow);
+  Invalidate;
 end;
 
 function TMultiHeaderDBGrid.PrepareCellEditor(ACol, ARow: Integer): TControl;
@@ -5786,11 +6075,16 @@ begin
       // Reuse the shared TMemo via the base implementation.
       Result:=inherited PrepareCellEditor(ACol, ARow);
 
-    ekCheckBox:
+    ekNumber:
       begin
         EnsureTypedEditors;
-        FActiveEditor:=FBoolEditor;
-        Result:=FBoolEditor;
+        // Follow the column's horizontal text alignment, like the TMemo does.
+        // Remove 'Other' from StyledSettings so the manual HorzAlign is honored
+        // instead of being overridden by the control's style.
+        FNumberEditor.StyledSettings:=FNumberEditor.StyledSettings-[TStyledSetting.Other];
+        FNumberEditor.TextSettings.HorzAlign:=ColTextHAlignment[ACol];
+        FActiveEditor:=FNumberEditor;
+        Result:=FNumberEditor;
       end;
 
     ekComboBox:
@@ -5846,6 +6140,23 @@ begin
   end;
 end;
 
+procedure TMultiHeaderDBGrid.PlaceEditorCaretAtEnd(Ed: TControl);
+begin
+  // Typed text editors (number / date / time) descend from TCustomEdit and
+  // expose GoToTextEnd; the combo box has no caret. Fall back to the base for
+  // the shared TMemo.
+  if Ed is TCustomEdit then begin
+    var E:=TCustomEdit(Ed);
+    E.GoToTextEnd;
+    // Belt-and-suspenders: set the caret index explicitly and clear any
+    // selection, since GoToTextEnd can be a no-op right after SetFocus on
+    // some platforms / before the style finishes applying.
+    E.SelLength:=0;
+    E.CaretPosition:=E.Text.Length;
+  end else
+    inherited;
+end;
+
 procedure TMultiHeaderDBGrid.LoadEditorValue(ACol, ARow: Integer; InitialChar: Char);
 begin
   var Field:=FEditField;
@@ -5858,8 +6169,35 @@ begin
     ekMemo:
       inherited;  // load text into the shared TMemo
 
-    ekCheckBox:
-      FBoolEditor.IsChecked:=Field.AsBoolean;
+    ekNumber:
+      begin
+        // Integer fields -> integer mode (no decimals); float/scaled fields ->
+        // float mode with a sensible number of decimal places.
+        if FieldIsInteger(Field) then begin
+          FNumberEditor.ValueType:=TNumValueType.Integer;
+          FNumberEditor.DecimalDigits:=0;
+        end else begin
+          FNumberEditor.ValueType:=TNumValueType.Float;
+          var Digits:=4;
+          if Field.DataType in [ftCurrency, ftBCD, ftFMTBcd] then Digits:=2;
+          FNumberEditor.DecimalDigits:=Digits;
+        end;
+        // Set the editor's allowed range to the field type's full range.
+        // Without this TNumberBox keeps its default (0..100) and clamps/
+        // corrupts the value.
+        var MinV, MaxV: Double;
+        NumberRangeForField(Field, MinV, MaxV);
+        FNumberEditor.Min:=MinV;
+        FNumberEditor.Max:=MaxV;
+        // Typing a digit/sign starts the value fresh from that char; F2 /
+        // double-click (InitialChar=#0) loads the field's current value.
+        if (InitialChar>=' ') and CharInSet(InitialChar, ['0'..'9','-','+','.',',']) then
+          FNumberEditor.Text:=InitialChar
+        else if Field.IsNull then
+          FNumberEditor.Value:=0
+        else
+          FNumberEditor.Value:=Field.AsFloat;
+      end;
 
     ekComboBox:
       FComboEditor.ItemIndex:=FComboEditor.Items.IndexOf(Field.AsString);
@@ -5890,7 +6228,8 @@ begin
 
   case EditorKindForField(Field) of
     ekMemo:      Result:=inherited GetEditorText;
-    ekCheckBox:  if FBoolEditor.IsChecked then Result:='1' else Result:='0';
+    ekNumber:    if FieldIsInteger(FEditField) then Result:=Trunc(FNumberEditor.Value).ToString
+                 else Result:=FNumberEditor.Value.ToString;
     ekComboBox:  if FComboEditor.Selected<>nil then Result:=FComboEditor.Selected.Text else Result:='';
     ekDate:      Result:=DateToStr(FDateEditor.Date);
     ekTime:      Result:=TimeToStr(FTimeEditor.Time);
@@ -5912,8 +6251,13 @@ var
     if not (DS.State in [dsEdit, dsInsert]) then DS.Edit;
     try
       case EditorKindForField(Field) of
-        ekCheckBox:
-          Field.AsBoolean:=FBoolEditor.IsChecked;
+        ekNumber:
+          // Assign through the matching typed setter so the field keeps its
+          // native precision (integer vs float).
+          if FieldIsInteger(Field) then
+            Field.AsLargeInt:=Trunc(FNumberEditor.Value)
+          else
+            Field.AsFloat:=FNumberEditor.Value;
         ekComboBox:
           if FComboEditor.ItemIndex>=0 then
             Field.AsString:=FComboEditor.Selected.Text;

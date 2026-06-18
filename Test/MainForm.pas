@@ -6,7 +6,8 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.MultiHeaderGrid,
   FMX.Controls.Presentation,
-  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient, System.ImageList, FMX.ImgList;
+  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient, System.ImageList, FMX.ImgList,
+  FMX.EditBox, FMX.NumberBox;
 
 type
   TForm1 = class(TForm)
@@ -18,8 +19,8 @@ type
     Label1: TLabel;
     ButtonBenchmark: TButton;
     TabControl1: TTabControl;
-    TabItem1: TTabItem;
-    TabItem2: TTabItem;
+    TabGrid: TTabItem;
+    TabStringGrid: TTabItem;
     StatusBar1: TStatusBar;
     StatusText: TLabel;
     Grid1: TMultiHeaderGrid;
@@ -28,10 +29,9 @@ type
     RowSelectCheckBox: TCheckBox;
     ButtonFillCells: TButton;
     WordWrapCheckBox: TCheckBox;
-    TabItem3: TTabItem;
+    TabDBGrid: TTabItem;
     CDS: TClientDataSet;
     DS: TDataSource;
-    IL1: TImageList;
     Panel2: TPanel;
     ButtonAddRow: TButton;
     ButtonDeleteRow: TButton;
@@ -58,8 +58,6 @@ type
     procedure GridDblClick(Sender: TObject);
     procedure WordWrapCheckBoxChange(Sender: TObject);
     procedure LimitWidthsCheckBoxChange(Sender: TObject);
-    procedure Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
-      IsSelected: Boolean; const Text: string; var Handled: Boolean);
     procedure ButtonDeleteRowClick(Sender: TObject);
     procedure ButtonAddRowClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
@@ -362,13 +360,13 @@ end;
 function TForm1.ActiveGrid: TMultiHeaderGrid;
 begin
   Result:=nil;
-  if TabControl1.ActiveTab=TabItem1 then begin
+  if TabControl1.ActiveTab=TabGrid then begin
     Result:=Grid1;
   end;
-  if TabControl1.ActiveTab=TabItem2 then begin
+  if TabControl1.ActiveTab=TabStringGrid then begin
     Result:=Grid2;
   end;
-  if TabControl1.ActiveTab=TabItem3 then begin
+  if TabControl1.ActiveTab=TabDBGrid then begin
     Result:=Grid3;
   end;
 end;
@@ -445,10 +443,10 @@ end;
 procedure TForm1.TabControl1Change(Sender: TObject);
 begin
   var Grid:=Grid1;
-  if TabControl1.ActiveTab=TabItem2 then begin
+  if TabControl1.ActiveTab=TabStringGrid then begin
     Grid:=Grid2;
   end;
-  if TabControl1.ActiveTab=TabItem3 then begin
+  if TabControl1.ActiveTab=TabDBGrid then begin
     Grid:=Grid3;
   end;
 
@@ -553,36 +551,6 @@ begin
   end;
 
   Grid1CellTexts[ARow,ACol]:=Text;
-end;
-
-procedure TForm1.Grid3DrawCell(Sender: TObject; ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF;
-                               IsSelected: Boolean; const Text: string; var Handled: Boolean);
-const
-  ImgSize = 16;
-begin
-  var Grid:=TMultiHeaderDBGrid(Sender);
-
-  if Grid.DataSet=nil then Exit;
-  if (ACol<0) or (ACol>=Grid.Columns.Count) then Exit;
-
-  var F:=Grid.DataSet.FindField(Grid.Columns[ACol].FieldName);
-  if (F=nil) or (F.DataType<>ftBoolean) then Exit;
-
-  if IsSelected then begin
-    Canvas.Fill.Color:=TAlphaColorRec.Lightblue;
-    Canvas.FillRect(Rect,1);
-  end else begin
-    Canvas.Fill.Color:=TAlphaColorRec.White;
-    Canvas.FillRect(Rect,1);
-  end;
-
-  var W:=Min(ImgSize,Rect.Width);
-  var H:=Min(ImgSize,Rect.Height);
-  var ImgRect:=TRectF.Create(0,0,W,H);
-  ImgRect.Offset(Rect.Left+(Rect.Width-W)/2, Rect.Top+(Rect.Height-H)/2);
-  IL1.Draw(Canvas,ImgRect,IfThen(Text='True',1,0));
-
-  Handled:=True;
 end;
 
 procedure TForm1.GridSelectCell(Sender: TObject);
