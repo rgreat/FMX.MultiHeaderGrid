@@ -379,12 +379,25 @@ type
       FHeaderColumns: TMHGHeaderColumns;
       FRebuildingHeaderColumns: Boolean;
       FGridCellsHasWordWrap: boolean;
+      // Precision of the last explicit AutoSize the user requested. Internal
+      // re-sizes (the inplace editor's row re-fit, commit re-fit, the visible-
+      // rows pass) reuse this so editing matches whatever mode the grid was last
+      // sized in - keeping fast grids fast and precise grids pixel-consistent.
+      FAutoSizePrecise: Boolean;
       FVerticalScroll: TScrollShowMode;
       FHorisontalScroll: TScrollShowMode;
 
       // Inplace cell editor (basic grids). A single reusable TMemo is moved
       // over the cell being edited.
       FEditor: TMemo;
+      // True once the memo's FMX style has been applied at least once (set in
+      // ApplyStyle). Until then FEditor.ContentBounds is unreliable.
+      FEditorStyled: Boolean;
+      // Set when a basic/string-grid edit starts before the memo is styled;
+      // consumed in Paint to re-place the editor on the first frame where
+      // ContentBounds is valid (fixes the ~10 px first-edit offset). Not used by
+      // the DB grid, whose memo placement (LayoutMemoEditor) is style-independent.
+      FEditorRepositionPending: Boolean;
       FEditorHost: TLayout;
       // Currently active inplace editor control. For the base/string grids
       // this is always FEditor (the TMemo). The DB grid may swap in a typed
@@ -447,6 +460,12 @@ type
     // host interior size, and shows it. Base fills the host with the
     // Client-aligned TMemo; the DB grid overrides for its typed editors.
     procedure LayoutActiveEditor(AWidth, AHeight: Single); virtual;
+    // True if the active editor's vertical placement depends on the memo's
+    // styled FEditor.ContentBounds (basic/string grids). When True the first
+    // edit defers a re-position to Paint, because ContentBounds is only valid
+    // after the style applies. The DB grid measures independently in
+    // LayoutMemoEditor, so it overrides this to False and needs no deferral.
+    function  EditorUsesStyledContentBounds: Boolean; virtual;
     // Takes down the editor UI: hides the host (and its FEditorBack child) and
     // the active editor. Descendants override to hide their extra editors too.
     procedure HideEditor; virtual;
@@ -954,6 +973,13 @@ type
     // --- Typed editor overrides (see base hooks) ------------------------
     function  PrepareCellEditor(ACol, ARow: Integer): TControl; override;
     procedure LayoutActiveEditor(AWidth, AHeight: Single); override;
+    // The DB grid's ekMemo placement (LayoutMemoEditor) is style-independent, so
+    // it doesn't need the basic grids' deferred first-edit re-position.
+    function  EditorUsesStyledContentBounds: Boolean; override;
+    // Self-contained placement of the shared TMemo for ekMemo cells. A private
+    // copy of the base logic (the DB grid does NOT call inherited for the memo),
+    // so the DB and base/string grids can be fixed independently.
+    procedure LayoutMemoEditor(AWidth, AHeight: Single);
     procedure HideEditor; override;
     procedure CancelEditing; override;
     procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); override;
@@ -1377,6 +1403,7 @@ begin
   inherited;
 
   FEditWidenAnchor:=-1;
+  FAutoSizePrecise:=False; // fast until the user requests a precise AutoSize
   FColCount:=5;
   FRowCount:=10;
   FDefaultColWidth:=80;
@@ -1998,6 +2025,21 @@ begin
   end;
 
   inherited;
+
+  // Consume a deferred first-edit re-position for the basic/string grids (see
+  // StartCellEditing). Once a frame has painted, the memo's style has applied and
+  // FEditor.ContentBounds is valid, so re-placing now lands the editor where
+  // later edits do. If the style hasn't applied yet this frame, keep the request
+  // and ask for another frame.
+  if FEditorRepositionPending then begin
+    if FEditorStyled then begin
+      FEditorRepositionPending:=False;
+      if FEditing and (ActiveEditorControl=FEditor) then
+        PositionEditor;
+    end
+    else
+      Invalidate;
+  end;
 end;
 
 procedure TMultiHeaderGrid.DrawHeaders(Canvas: TCanvas);
@@ -2531,6 +2573,10 @@ end;
 
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
+  // Remember the mode the user asked for, so in-house re-sizes (editor re-fit,
+  // commit re-fit, visible-rows pass) reuse it - fast stays fast, precise stays
+  // pixel-consistent with the editor.
+  FAutoSizePrecise:=ForcePrecise;
   AutoSizeCols(ForcePrecise); // also re-fits header heights to the new widths
   AutoSizeRows(ForcePrecise);
   UpdateSize;
@@ -2760,8 +2806,14 @@ begin
                        TTextAlign.Leading,TTextAlign.Leading);
     TextHeight:=MeasureRect.Height;
   end else begin
+    // Plain (no-wrap) text: height is simply the line count times the line
+    // height. (Earlier this subtracted LineCount*FGridLineWidth - one gridline
+    // per text line - which has no geometric basis: gridlines sit *between
+    // rows*, not between text lines inside a cell. That made multi-line cells a
+    // couple of pixels too short, so the editor/AutoSize height disagreed with
+    // the initial fast-path height. Removing it makes all sizing paths agree.)
     var LineCount:=CountLines(AText);
-    TextHeight:=Canvas.TextHeight('A')*LineCount-LineCount*FGridLineWidth;
+    TextHeight:=Canvas.TextHeight('A')*LineCount;
   end;
 
   var CellDelimterHeight:=FGridLineWidth;
@@ -3199,7 +3251,6 @@ begin
 
   Canvas.Font.Assign(FCellFont);
   var TH:=Canvas.TextHeight('A');
-  var Text:='';
   for var Row:=FromRow to FRowCount-1 do begin
     if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
        ((ToRow>=0) and (Row>ToRow)) then Break;
@@ -3238,84 +3289,34 @@ begin
 
           MaxHeight:=Max(MaxHeight,TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
-        cmSlow: begin
-          // Regular calculation
 
-          var CellStyle:=CellStyle[Col,Row];
-          Canvas.Font.Assign(FCellFont);
-          if CellStyle.FontNameIsSet then begin
-            Canvas.Font.Family:=CellStyle.FontName;
-          end;
-          if CellStyle.FontSizeIsSet then begin
-            Canvas.Font.Size:=CellStyle.FontSize;
-          end;
-          if CellStyle.FontStyleIsSet then begin
-            Canvas.Font.Style:=CellStyle.FontStyle;
-          end;
-
-          MaxHeight:=Max(MaxHeight,TextLines*Canvas.TextHeight('A')/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
-        end;
-
+        cmSlow,
         cmFull: begin
-          // Calculation accounting for WordWrap, slow.
-
-          var AvailableWidth:=GetCellRect(Col,Row,MergedCell).Width;
-
-          var ActualCol: integer;
-          var ActualRow: integer;
-          if (MergedCell.ColSpan>1) or (MergedCell.RowSpan>1) then begin
-            Text:=Cells[MergedCell.Col,MergedCell.Row];
-            RowSpan:=MergedCell.RowSpan;
+          // Precise calculation. Both the no-wrap (cmSlow) and word-wrap (cmFull)
+          // cases delegate to MeasureCellTextHeight - the same routine the inplace
+          // editor uses for its live row-fit. Sharing one measurement (identical
+          // font assignment, gridline subtraction and single-line floor) is what
+          // makes the committed-text row height and the editor's height agree for
+          // custom-sized/styled fonts; the previous inline formulas drifted from
+          // it and made styled rows shrink a pixel on edit start.
+          var ActualCol:=Col;
+          var ActualRow:=Row;
+          if IsMergedCell(Col,Row,MergedCell) then begin
             ActualCol:=MergedCell.Col;
             ActualRow:=MergedCell.Row;
-          end else begin
-            Text:=Cells[Col,Row];
-            ActualCol:=Col;
-            ActualRow:=Row;
           end;
-
-          var CellStyle:=CellStyle[ActualCol,ActualRow];
-
-          // Determine whether word wrap is enabled
-          var WordWrapEnabled: Boolean;
-          if CellStyle.WordWrapIsSet then begin
-            WordWrapEnabled:=CellStyle.WordWrap;
-          end else begin
-            WordWrapEnabled:=FWordWrap or FColData[ActualCol].WordWrap;
-          end;
-
-          // Set up the font
-          Canvas.Font.Assign(FCellFont);
-          if CellStyle.FontNameIsSet then begin
-            Canvas.Font.Family:=CellStyle.FontName;
-          end;
-          if CellStyle.FontSizeIsSet then begin
-            Canvas.Font.Size:=CellStyle.FontSize;
-          end;
-          if CellStyle.FontStyleIsSet then begin
-            Canvas.Font.Style:=CellStyle.FontStyle;
-          end;
-
-          var TextHeight:Single;
-          if WordWrapEnabled and (Text<>'') then begin
-            // Use MeasureText for the calculation
-            var MeasureRect:=TRectF.Create(0,0,AvailableWidth,10000);
-            Canvas.MeasureText(MeasureRect,Text,True,[],TTextAlign.Leading,TTextAlign.Leading);
-            TextHeight:=MeasureRect.Height;
-          end else begin
-            // Without WordWrap, count line breaks
-            var LineCount:=CountLines(Text);
-            TextHeight:=Canvas.TextHeight('A')*LineCount-LineCount*FGridLineWidth;
-          end;
-
-          // Adjust the height
-          MaxHeight:=Max(MaxHeight,TextHeight/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+          MaxHeight:=Max(MaxHeight,
+            MeasureCellTextHeight(ActualCol,ActualRow,Cells[ActualCol,ActualRow],RowSpan));
         end;
       end;
     end;
 
     if Row>=0 then begin
-      FRowData[Row].Height:=Trunc(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+      // Ceil (not Trunc) so this matches MemoEditorTextChanged's row-fit, which
+      // also Ceils. Flooring here while the editor Ceils made each edit re-floor
+      // the row a sub-pixel shorter than the editor had grown it, so repeated
+      // edits slowly shrank the row. Rounding both the same way removes that.
+      FRowData[Row].Height:=Ceil(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
       if Row>0 then begin
         FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
       end;
@@ -3330,7 +3331,7 @@ end;
 
 procedure TMultiHeaderGrid.AutoSizeVisibleRows;
 begin
-  AutoSizeRows(RowAtHeightCoord(ViewTop), -1, True);
+  AutoSizeRows(RowAtHeightCoord(ViewTop), -1, FAutoSizePrecise);
 end;
 
 
@@ -4106,6 +4107,10 @@ begin
   Obj:=Ctrl.FindStyleResource('background');
   if Obj is TControl then
     TControl(Obj).Opacity:=0;
+
+  // The shared memo's style is now applied, so FEditor.ContentBounds is reliable.
+  if Sender=FEditor then
+    FEditorStyled:=True;
 end;
 
 procedure TMultiHeaderGrid.MemoEditorTextChanged(Sender: TObject);
@@ -4136,7 +4141,9 @@ begin
 
   // 1. Floor from all committed cells in the row/span (the edited cell still
   //    holds its pre-edit text - step 2 accounts for the live editor text).
-  AutoSizeRows(FromRow,ToRow,True);
+  //    Use the grid's sticky AutoSize mode so a fast grid stays fast; step 2
+  //    measures the edited cell precisely regardless, so the editor aligns.
+  AutoSizeRows(FromRow,ToRow,FAutoSizePrecise);
 
   // 2. Height the uncommitted editor text needs, measured identically, then
   //    converted to a whole-pixel row height with Ceil (never Trunc - flooring
@@ -4198,9 +4205,9 @@ begin
       // height. A merged cell spans several rows - autosize that whole range.
       var MergedCell: TMergedCell;
       if IsMergedCell(ACol,ARow,MergedCell) then
-        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, True)
+        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, FAutoSizePrecise)
       else
-        AutoSizeRows(ARow, ARow, True);
+        AutoSizeRows(ARow, ARow, FAutoSizePrecise);
       UpdateSize; // total height changed -> refresh scrollbar range
     end;
 end;
@@ -4250,7 +4257,7 @@ begin
   var HostW:=R.Width-FGridLineWidth/2;
   var HostH:=R.Height-FGridLineWidth/2;
 
-  FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4, HostW, HostH-1);
+  FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4+1, HostW, HostH-1);
   FEditorHost.Visible:=True;
   FEditorHost.BringToFront;
 
@@ -4276,6 +4283,12 @@ begin
     // honour TextVAlignment we shift the whole control down by the slack
     // between the cell height and the text height. Center -> half the slack,
     // Trailing -> all of it, Leading -> none.
+    //
+    // TextH comes from FEditor.ContentBounds, which the -3/+8 baseline nudge
+    // below is calibrated against. ContentBounds is only valid once the memo's
+    // FMX style has applied; on the very first edit it reads too large, so the
+    // first placement is corrected by a deferred re-position in Paint (see
+    // FEditorRepositionPending) once the style is in effect.
     var TextH:=FEditor.ContentBounds.Height;
     var Slack:=AHeight - TextH;
     if Slack<0 then Slack:=0;
@@ -4300,6 +4313,7 @@ procedure TMultiHeaderGrid.HideEditor;
 begin
   // Hiding the host hides its FEditorBack child too. Descendants override to
   // also hide any extra editors they parented into the host.
+  FEditorRepositionPending:=False; // editor going away - drop any deferred move
   if FEditorHost<>nil then FEditorHost.Visible:=False;
   var Ed:=ActiveEditorControl;
   if Ed<>nil then Ed.Visible:=False;
@@ -4362,6 +4376,23 @@ begin
   if Ed.CanFocus then
     Ed.SetFocus;
   PlaceEditorCaretAtEnd(Ed);
+
+  // First edit on the basic/string grids: the PositionEditor above read a stale
+  // FEditor.ContentBounds (style not applied yet) and placed the text ~10 px too
+  // low. Defer a re-position to the next Paint, by which point the style has
+  // applied and ContentBounds is valid. The DB grid measures independently
+  // (EditorUsesStyledContentBounds=False), so it is unaffected.
+  if (ActiveEditorControl=FEditor) and (not FEditorStyled) and
+     EditorUsesStyledContentBounds then begin
+    FEditorRepositionPending:=True;
+    Invalidate; // ensure a Paint happens to consume the pending re-position
+  end;
+end;
+
+function TMultiHeaderGrid.EditorUsesStyledContentBounds: Boolean;
+begin
+  // Basic/string grids place the memo from FEditor.ContentBounds.
+  Result:=True;
 end;
 
 procedure TMultiHeaderGrid.WidenColForEditor(ACol, ARow: Integer);
@@ -6654,11 +6685,14 @@ begin
   var Ed:=ActiveEditorControl;
   if Ed=nil then Exit;
 
-  // ekMemo cells reuse the shared TMemo (FActiveEditor=FEditor); the base sizes
-  // and lays it out.
+  // ekMemo cells reuse the shared TMemo (FActiveEditor=FEditor). The memo
+  // placement is intentionally a self-contained copy of the base's logic rather
+  // than a call to `inherited`: the base and DB grids size the memo differently
+  // enough (style/ContentBounds timing) that sharing one path made fixing one
+  // grid regress the other. Keeping them separate lets each be tuned alone.
   if Ed=FEditor then begin
     HideTypedEditors(nil, False);
-    inherited;
+    LayoutMemoEditor(AWidth, AHeight);
     Exit;
   end;
 
@@ -6713,6 +6747,51 @@ begin
     Ed.Visible:=True;
     Ed.BringToFront;
   end;
+end;
+
+function TMultiHeaderDBGrid.EditorUsesStyledContentBounds: Boolean;
+begin
+  // ekMemo cells are placed by LayoutMemoEditor, which measures text height
+  // independently of the memo's applied style - no deferred re-position needed.
+  Result:=False;
+end;
+
+procedure TMultiHeaderDBGrid.LayoutMemoEditor(AWidth, AHeight: Single);
+// DB grid's own copy of the shared-TMemo placement for ekMemo cells. Kept
+// separate from TMultiHeaderGrid.LayoutActiveEditor (no `inherited`) so the two
+// grids can be tuned independently. This currently mirrors the base logic that
+// was working well for the DB grid; adjust here without affecting the basic
+// grids.
+begin
+  if FEditor=nil then Exit;
+
+  var Style:=EffectiveCellStyle(FEditCol, FEditRow);
+
+  FEditor.TextSettings.HorzAlign  :=Style.TextHAlignment;
+  FEditor.TextSettings.Font.Family:=Style.FontName;
+  FEditor.TextSettings.Font.Size  :=Style.FontSize;
+  FEditor.TextSettings.Font.Style :=Style.FontStyle;
+  FEditor.WordWrap:=Style.WordWrap;
+
+  var RowSpan:=1;
+  var MC: TMergedCell;
+  if IsMergedCell(FEditCol,FEditRow,MC) then RowSpan:=MC.RowSpan;
+  var TextH:=MeasureCellTextHeight(FEditCol,FEditRow,FEditor.Text,RowSpan);
+  var Slack:=AHeight - TextH;
+  if Slack<0 then Slack:=0;
+
+  var OffY: Single;
+  case Style.TextVAlignment of
+    TTextAlign.Center:   OffY:=Slack/2;
+    TTextAlign.Trailing: OffY:=Slack;
+  else
+    OffY:=0; // Leading
+  end;
+
+  FEditor.SetBounds(0, OffY-3, AWidth+3, AHeight-OffY+8);
+
+  FEditor.Visible:=True;
+  FEditor.BringToFront;
 end;
 
 procedure TMultiHeaderDBGrid.HideTypedEditors(Keep: TControl; KeepComposite: Boolean);
