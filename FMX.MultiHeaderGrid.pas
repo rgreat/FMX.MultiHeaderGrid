@@ -378,6 +378,10 @@ type
       FHeaderWordWrap: Boolean;
       FHeaderColumns: TMHGHeaderColumns;
       FRebuildingHeaderColumns: Boolean;
+      // Raised by bulk operations (header/column rebuilds) that apply word-wrap
+      // to many columns at once, so the per-setter row re-fit doesn't run once
+      // per column. The caller does a single sizing pass when finished.
+      FSuppressAutoSize: Boolean;
       FGridCellsHasWordWrap: boolean;
       // Precision of the last explicit AutoSize the user requested. Internal
       // re-sizes (the inplace editor's row re-fit, commit re-fit, the visible-
@@ -1989,10 +1993,6 @@ var
 begin
   Canvas:=Self.Canvas;
 
-  if GridHaveWordWrap then begin
-    AutoSizeVisibleRows;
-  end;
-
   if Canvas.BeginScene then begin
     var Save:=Canvas.SaveState;
     try
@@ -2677,14 +2677,20 @@ begin
     El.Style.TextVAlignmentIsSet:=True;
   end;
 
-  // Apply per-column geometry/alignment/word wrap.
-  for var i:=0 to N-1 do begin
-    if ACols[i].Width>0 then ColWidths[i]:=ACols[i].Width;
-    if ACols[i].MinWidth>0 then ColMinWidth[i]:=ACols[i].MinWidth;
-    if ACols[i].MaxWidth>0 then ColMaxWidth[i]:=ACols[i].MaxWidth;
-    ColWordWrap[i]:=ACols[i].WordWrap;
-    ColTextHAlignment[i]:=ACols[i].Alignment;
-    ColTextVAlignment[i]:=ACols[i].VertAlignment;
+  // Apply per-column geometry/alignment/word wrap. Suppress the per-setter row
+  // re-fit while looping; a single AutoSize follows at the call site / below.
+  FSuppressAutoSize:=True;
+  try
+    for var i:=0 to N-1 do begin
+      if ACols[i].Width>0 then ColWidths[i]:=ACols[i].Width;
+      if ACols[i].MinWidth>0 then ColMinWidth[i]:=ACols[i].MinWidth;
+      if ACols[i].MaxWidth>0 then ColMaxWidth[i]:=ACols[i].MaxWidth;
+      ColWordWrap[i]:=ACols[i].WordWrap;
+      ColTextHAlignment[i]:=ACols[i].Alignment;
+      ColTextVAlignment[i]:=ACols[i].VertAlignment;
+    end;
+  finally
+    FSuppressAutoSize:=False;
   end;
 
   Invalidate;
@@ -3942,7 +3948,20 @@ end;
 
 procedure TMultiHeaderGrid.SetCellStyle(ACol, ARow: Integer; const Value: TCellStyle);
 begin
+  // Did this cell already wrap before the new style is applied?
+  var WrappedBefore:=EffectiveCellWordWrap(ACol, ARow);
+
   DoSetCellStyle(ACol, ARow, Value);
+
+  // If the new per-cell style turns word-wrap on where it was off, the row's
+  // height can change; fit just that row now (the removed per-Paint pass used
+  // to catch this). Comparing before/after means merge/clear operations that
+  // merely rewrite an already-wrapped style don't trigger a needless pass.
+  if (not FSuppressAutoSize) and (ARow>=0) and (ARow<FRowCount) and
+     (not WrappedBefore) and EffectiveCellWordWrap(ACol, ARow) then begin
+    AutoSizeRows(ARow, ARow, FAutoSizePrecise);
+    UpdateSize;
+  end;
 end;
 
 procedure TMultiHeaderGrid.SetCellColor(const Value: TAlphaColor);
@@ -5265,8 +5284,15 @@ end;
 
 procedure TMultiHeaderGrid.SetColWordWrap(Index: Integer; const Value: Boolean);
 begin
-  if (Index>=0) and (Index<FColCount) then begin
+  if (Index>=0) and (Index<FColCount) and (FColData[Index].WordWrap<>Value) then begin
     FColData[Index].WordWrap:=Value;
+    // This column's cells now wrap (or stop wrapping), changing row heights.
+    // Skipped during a bulk rebuild (it applies wrap to every column in a loop
+    // and sizes once at the end).
+    if not FSuppressAutoSize then begin
+      AutoSizeRows(FAutoSizePrecise);
+      UpdateSize;
+    end;
     Invalidate;
   end;
 end;
@@ -5280,6 +5306,13 @@ procedure TMultiHeaderGrid.SetWordWrap(const Value: Boolean);
 begin
   if FWordWrap<>Value then begin
     FWordWrap:=Value;
+    // Row heights depend on wrap, so re-fit them now (the per-Paint autosize
+    // that used to do this was removed for performance). Skipped during a
+    // bulk rebuild, which does its own single sizing pass at the end.
+    if not FSuppressAutoSize then begin
+      AutoSizeRows(FAutoSizePrecise);
+      UpdateSize;
+    end;
     Invalidate;
   end;
 end;
@@ -5819,21 +5852,26 @@ begin
     // collection. Column *data-cell* colour is handled separately in
     // DoGetCellStyle via FColMap, so it is intentionally not set here.
     if Length(Cols)=ColCount then begin
-      for var i:=0 to ColCount-1 do begin
-        var Col:=Cols[i];
-        if Col=nil then Continue;
-        // Initial width only on a fresh/changed layout; otherwise the live
-        // (user-dragged) width stands.
-        if LayoutChanged and (Col.Width>0) then ColWidths[i]:=Col.Width;
-        if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
-        if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
-        // When a column drops its limits (Min/Max back to 0), restore the
-        // permissive defaults so a previously clamped width can grow again.
-        if Col.MinWidth<=0 then ColMinWidth[i]:=0;
-        if Col.MaxWidth<=0 then ColMaxWidth[i]:=MaxInt;
-        ColWordWrap[i]:=Col.WordWrap;
-        ColTextHAlignment[i]:=Col.Alignment;
-        ColTextVAlignment[i]:=Col.VertAlignment;
+      FSuppressAutoSize:=True;
+      try
+        for var i:=0 to ColCount-1 do begin
+          var Col:=Cols[i];
+          if Col=nil then Continue;
+          // Initial width only on a fresh/changed layout; otherwise the live
+          // (user-dragged) width stands.
+          if LayoutChanged and (Col.Width>0) then ColWidths[i]:=Col.Width;
+          if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
+          if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
+          // When a column drops its limits (Min/Max back to 0), restore the
+          // permissive defaults so a previously clamped width can grow again.
+          if Col.MinWidth<=0 then ColMinWidth[i]:=0;
+          if Col.MaxWidth<=0 then ColMaxWidth[i]:=MaxInt;
+          ColWordWrap[i]:=Col.WordWrap;
+          ColTextHAlignment[i]:=Col.Alignment;
+          ColTextVAlignment[i]:=Col.VertAlignment;
+        end;
+      finally
+        FSuppressAutoSize:=False;
       end;
     end;
 
@@ -5846,6 +5884,13 @@ begin
         FHeaderLevels[i].Height:=SavedHeights[i];
 
     UpdateRowCount;
+
+    // Rows just got default heights from UpdateRowCount; if the grid wraps,
+    // fit them to content now (the removed per-Paint pass used to do this).
+    if GridHaveWordWrap then begin
+      AutoSizeRows(FAutoSizePrecise);
+      UpdateSize;
+    end;
   finally
     FRebuildingHeader:=False;
   end;
@@ -6658,6 +6703,20 @@ begin
   // Drop the cached row text so DoGetCellText re-reads the committed value.
   FCellTexts.Remove(ARow);
   FEditField:=nil;
+
+  // The committed value may need a different number of wrapped lines, so re-fit
+  // the row height (the base CommitEditorValue does the same for Cells[]; the
+  // removed per-Paint autosize no longer covers this). Merged cells span a
+  // range. Done before Invalidate so the new height paints immediately.
+  if Result and (ARow>=0) and (ARow<FRowCount) then begin
+    var MergedCell: TMergedCell;
+    if IsMergedCell(ACol,ARow,MergedCell) then
+      AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, FAutoSizePrecise)
+    else
+      AutoSizeRows(ARow, ARow, FAutoSizePrecise);
+    UpdateSize;
+  end;
+
   Invalidate;
 end;
 

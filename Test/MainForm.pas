@@ -7,7 +7,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.MultiHeaderGrid,
   FMX.Controls.Presentation,
   FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient, System.ImageList, FMX.ImgList,
-  FMX.EditBox, FMX.NumberBox;
+  FMX.EditBox, FMX.NumberBox, MidasLib;
 
 type
   TForm1 = class(TForm)

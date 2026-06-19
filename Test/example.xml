@@ -17,19 +17,19 @@
 				<PARAM Name="PROVFLAGS" Value="1" Type="i4" Roundtrip="True"/>
 				<PARAM Name="ORIGIN" Value="kldotpk" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="klkod" fieldtype="string.uni" WIDTH="4">
+			<FIELD attrname="klkod" fieldtype="string.uni" WIDTH="8">
 				<PARAM Name="ORIGIN" Value="klkod" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="klnazv" fieldtype="string.uni" WIDTH="24">
+			<FIELD attrname="klnazv" fieldtype="string.uni" WIDTH="48">
 				<PARAM Name="ORIGIN" Value="klnazv" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="klname" fieldtype="string.uni" WIDTH="200">
+			<FIELD attrname="klname" fieldtype="string.uni" WIDTH="400">
 				<PARAM Name="ORIGIN" Value="klname" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="kltip" fieldtype="string.uni" WIDTH="2">
+			<FIELD attrname="kltip" fieldtype="string.uni" WIDTH="4">
 				<PARAM Name="ORIGIN" Value="kltip" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="klabd" fieldtype="string.uni" WIDTH="2">
+			<FIELD attrname="klabd" fieldtype="string.uni" WIDTH="4">
 				<PARAM Name="ORIGIN" Value="klabd" Roundtrip="True"/>
 			</FIELD>
 			<FIELD attrname="klsob" fieldtype="i4" WIDTH="10">
@@ -56,7 +56,7 @@
 			<FIELD attrname="klfl04" fieldtype="boolean">
 				<PARAM Name="ORIGIN" Value="klfl04" Roundtrip="True"/>
 			</FIELD>
-			<FIELD attrname="cor_tip" fieldtype="string.uni" WIDTH="2">
+			<FIELD attrname="cor_tip" fieldtype="string.uni" WIDTH="4">
 				<PARAM Name="ORIGIN" Value="cor_tip" Roundtrip="True"/>
 			</FIELD>
 			<FIELD attrname="cor_time" fieldtype="SQLdateTime">
