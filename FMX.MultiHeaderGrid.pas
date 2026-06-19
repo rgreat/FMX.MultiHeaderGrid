@@ -417,6 +417,7 @@ type
       FEditWidenAnchor: Integer;
       FEditWidenStartW: Integer;
       FReadOnly: Boolean;
+      FPainted: boolean;
 
     function ResizeStartWidth: Integer;
     procedure SetHeaderWordWrap(const Value: Boolean);
@@ -1063,7 +1064,7 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform, System.StrUtils;
+  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, System.Diagnostics;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -1331,29 +1332,100 @@ begin
 end;
 
 procedure TMHGHeaderColumn.SetTitle(const Value: string);
-begin if FTitle<>Value then begin FTitle:=Value; Changed; end; end;
+begin
+  if FTitle <> Value then begin
+    FTitle := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetWidth(const Value: Integer);
-begin if FWidth<>Value then begin FWidth:=Value; Changed; end; end;
+begin
+  if FWidth <> Value then begin
+    FWidth := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetMinWidth(const Value: Integer);
-begin if FMinWidth<>Value then begin FMinWidth:=Value; Changed; end; end;
+begin
+  if FMinWidth <> Value then begin
+    FMinWidth := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetMaxWidth(const Value: Integer);
-begin if FMaxWidth<>Value then begin FMaxWidth:=Value; Changed; end; end;
+begin
+  if FMaxWidth <> Value then begin
+    FMaxWidth := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetVisible(const Value: Boolean);
-begin if FVisible<>Value then begin FVisible:=Value; Changed; end; end;
+begin
+  if FVisible <> Value then begin
+    FVisible := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetWordWrap(const Value: Boolean);
-begin if FWordWrap<>Value then begin FWordWrap:=Value; Changed; end; end;
+begin
+  if FWordWrap <> Value then begin
+    FWordWrap := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetAlignment(const Value: TTextAlign);
-begin if FAlignment<>Value then begin FAlignment:=Value; Changed; end; end;
+begin
+  if FAlignment <> Value then begin
+    FAlignment := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetVertAlignment(const Value: TTextAlign);
-begin if FVertAlignment<>Value then begin FVertAlignment:=Value; Changed; end; end;
+begin
+  if FVertAlignment <> Value then begin
+    FVertAlignment := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetHeaderAlignment(const Value: TTextAlign);
-begin if FHeaderAlignment<>Value then begin FHeaderAlignment:=Value; Changed; end; end;
+begin
+  if FHeaderAlignment <> Value then begin
+    FHeaderAlignment := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetHeaderVertAlignment(const Value: TTextAlign);
-begin if FHeaderVertAlignment<>Value then begin FHeaderVertAlignment:=Value; Changed; end; end;
+begin
+  if FHeaderVertAlignment <> Value then begin
+    FHeaderVertAlignment := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetGroupHeader(const Value: string);
-begin if FGroupHeader<>Value then begin FGroupHeader:=Value; Changed; end; end;
+begin
+  if FGroupHeader <> Value then begin
+    FGroupHeader := Value;
+    Changed;
+  end;
+end;
+
 procedure TMHGHeaderColumn.SetGroupHeaderSeparator(const Value: Char);
-begin if FGroupHeaderSeparator<>Value then begin FGroupHeaderSeparator:=Value; Changed; end; end;
+begin
+  if FGroupHeaderSeparator <> Value then begin
+    FGroupHeaderSeparator := Value;
+    Changed;
+  end;
+end;
 
 { TMHGHeaderColumns }
 
@@ -1419,6 +1491,8 @@ begin
   FHeaderLineColor:=TAlphaColors.Black;
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
+
+  FCellPadding:=TBounds.Create(TRectF.Create(1,1,1,1));
 
   Margins.Rect:=RectF(4,4,4,4);
 
@@ -2040,6 +2114,8 @@ begin
     else
       Invalidate;
   end;
+
+  FPainted:=True;
 end;
 
 procedure TMultiHeaderGrid.DrawHeaders(Canvas: TCanvas);
@@ -2784,7 +2860,8 @@ begin
 end;
 
 function TMultiHeaderGrid.MeasureCellTextHeight(ACol, ARow: Integer;
-  const AText: string; RowSpan: Integer): Single;
+                                                const AText: string;
+                                                RowSpan: Integer): Single;
 // Single source of truth for the height a data cell's text needs (the raw text
 // block height, BEFORE padding/gridline are added). Used by both the inplace
 // editor (uncommitted FEditor.Text) and any caller that must match the row
@@ -2806,7 +2883,7 @@ begin
   Canvas.Font.Style :=Style.FontStyle;
 
   if Style.WordWrap and (AText<>'') then begin
-    var AvailWidth:=GetCellRect(ACol,ARow,MergedCell).Width;
+    var AvailWidth:=GetCellRect(ACol,ARow,MergedCell).Width-FGridLineWidth-FCellPadding.Left-FCellPadding.Right;
     var MeasureRect:=TRectF.Create(0,0,AvailWidth,10000);
     Canvas.MeasureText(MeasureRect,AText,True,[],
                        TTextAlign.Leading,TTextAlign.Leading);
@@ -3293,7 +3370,8 @@ begin
             end;
           end;
 
-          MaxHeight:=Max(MaxHeight,TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+          MaxHeight:=Max(MaxHeight,
+                         TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
         end;
 
         cmSlow,
@@ -3312,7 +3390,7 @@ begin
             ActualRow:=MergedCell.Row;
           end;
           MaxHeight:=Max(MaxHeight,
-            MeasureCellTextHeight(ActualCol,ActualRow,Cells[ActualCol,ActualRow],RowSpan));
+                         MeasureCellTextHeight(ActualCol,ActualRow,Cells[ActualCol,ActualRow],RowSpan));
         end;
       end;
     end;
@@ -3332,12 +3410,21 @@ begin
   for var Row:=1 to FRowCount-1 do begin
     FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
   end;
-  Invalidate;
+//  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.AutoSizeVisibleRows;
+// Re-fits only the rows currently on screen (first..last visible row). Used for
+// live feedback during a column drag, where re-measuring every row below the
+// viewport on each MouseMove would be needlessly expensive.
 begin
-  AutoSizeRows(RowAtHeightCoord(ViewTop), -1, FAutoSizePrecise);
+  var First:=RowAtHeightCoord(ViewTop);
+  if First<0 then First:=0;
+  var Last:=RowAtHeightCoord(ViewBottom);
+  if Last<First then Last:=FRowCount-1; // viewport past the last row
+  AutoSizeRows(First, Last, FAutoSizePrecise);
+
+  UpdateSize;
 end;
 
 
@@ -3469,8 +3556,6 @@ var
   NewWidth, NewHeight : Integer;
   GlobalPos           : TPointF;
 begin
-  inherited;
-
   if FResizeEnabled then begin
     case FResizeMode of
       TResizeMode.rmColumn: begin
@@ -3480,6 +3565,16 @@ begin
           NewWidth:=ResizeStartWidth+Round(GlobalPos.X-FResizeStartPos.X);
           UpdateColumnWidth(FResizeStartColumnIndex,FResizeEndColumnIndex, NewWidth);
           Cursor:=crHSplit;
+
+          if FPainted then begin
+            FPainted:=False;
+            // Wrapped text reflows as the column narrows/widens, changing row
+            // heights. Re-fit only the on-screen rows for live feedback; the full
+            // pass runs once on MouseUp (drag end).
+            if GridHaveWordWrap then begin
+              AutoSizeVisibleRows;
+            end;
+          end;
         end;
       end;
       TResizeMode.rmHeaderRow: begin
@@ -3521,12 +3616,21 @@ begin
   if (Button=TMouseButton.mbLeft) then begin
     // Finish the column resize
     if FResizeMode<>TResizeMode.rmNone then begin
+      var WasColumnResize:=(FResizeMode=TResizeMode.rmColumn);
       DoColumnResized;
       FResizeStartColumnIndex:=-1;
       FResizeEndColumnIndex:=-1;
       FResizeRowIndex:=-1;
       FResizeMode:=TResizeMode.rmNone;
       Cursor:=crDefault;
+
+      // Column width is now final; do the authoritative full re-fit of every
+      // row so off-screen rows (skipped during the live drag) match the new
+      // wrap. No-op when the grid doesn't word-wrap.
+      if WasColumnResize and GridHaveWordWrap then begin
+        AutoSizeRows(FAutoSizePrecise);
+        UpdateSize;
+      end;
     end;
   end;
 end;
@@ -5309,7 +5413,7 @@ begin
     // Row heights depend on wrap, so re-fit them now (the per-Paint autosize
     // that used to do this was removed for performance). Skipped during a
     // bulk rebuild, which does its own single sizing pass at the end.
-    if not FSuppressAutoSize then begin
+    if not FSuppressAutoSize and Value then begin
       AutoSizeRows(FAutoSizePrecise);
       UpdateSize;
     end;

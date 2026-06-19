@@ -289,6 +289,8 @@ begin
 
   CDS.LoadFromFile('example.xml');
 
+  Columns.Clear; // To make our own column sequence
+
   Columns.SetColumnProps('id',       'Internal'#13#10'identifier');
 
   Columns.SetColumnProps('klns',     'Service class number',  'Service class');

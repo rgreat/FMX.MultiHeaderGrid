@@ -287,7 +287,6 @@ object Form1: TForm1
           OnClick = ButtonDeleteRowClick
         end
         object LimitWidthsCheckBox: TCheckBox
-          IsChecked = True
           Position.X = 155.000000000000000000
           Position.Y = 8.000000000000000000
           Size.Width = 132.000000000000000000
