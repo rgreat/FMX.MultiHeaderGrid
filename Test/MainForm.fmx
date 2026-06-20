@@ -5,6 +5,7 @@ object Form1: TForm1
   ClientHeight = 557
   ClientWidth = 1550
   Position = DesktopCenter
+  StyleBook = StyleBook1
   FormFactor.Width = 320
   FormFactor.Height = 480
   FormFactor.Devices = [Desktop]
@@ -426,6 +427,11 @@ object Form1: TForm1
       Text = 'RowCount'
       TabOrder = 3
     end
+  end
+  object StyleBook1: TStyleBook
+    Styles = <
+      item
+      end>
   end
   object CDS: TClientDataSet
     Aggregates = <>

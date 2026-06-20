@@ -1064,11 +1064,26 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, System.Diagnostics;
+  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, System.Diagnostics, FMX.Styles, FMX.Styles.Objects;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
 function CountLines(const Text: string): Integer; forward;
+
+var
+  MemoStyle   : TLayout;
+  NumberStyle : TLayout;
+  ComboStyle  : TLayout;
+  DateStyle   : TLayout;
+  TimeStyle   : TLayout;
+
+const
+  // Usable minimum widths (px) for the fixed-size typed editors. The memo and
+  // checkbox are comfortable in a narrow column, so they keep the default 0.
+  MINW_COMBO    = 120;
+  MINW_DATE     = 74;  // 'dd.MM.yyyy'
+  MINW_TIME     = 64;  // 'HH:nn:ss' plus picker button
+  MINW_DATETIME = MINW_DATE+MINW_TIME; // date + time composite
 
 procedure Register;
 begin
@@ -1492,8 +1507,6 @@ begin
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
 
-  FCellPadding:=TBounds.Create(TRectF.Create(1,1,1,1));
-
   Margins.Rect:=RectF(4,4,4,4);
 
   VScrollBar:=TScrollBar.Create(Self);
@@ -1595,7 +1608,7 @@ begin
   FHeaderColumns.Free;
   FCellFont.Free;
   FHeaderFont.Free;
-  CellPadding.Free;
+  FCellPadding.Free;
 
   VScrollBar.Free;
   HScrollBar.Free;
@@ -4212,9 +4225,10 @@ begin
   FEditor.StyledSettings:=[];
   FEditor.ShowScrollBars:=False;
   FEditor.DisableMouseWheel:=True;
-  FEditor.OnApplyStyleLookup:=ApplyStyle;
   FEditor.TextSettings.HorzAlign:=TextAlign;
   FEditor.OnChange:=MemoEditorTextChanged;
+  FEditor.StyleLookup:='mhg_editor_memo';
+
   WireEditor(FEditor); // parent into host + wire OnKeyDown/OnExit
 end;
 
@@ -4380,7 +4394,7 @@ begin
   var HostW:=R.Width-FGridLineWidth/2;
   var HostH:=R.Height-FGridLineWidth/2;
 
-  FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4+1, HostW, HostH-1);
+  FEditorHost.SetBounds(R.Left+FGridLineWidth/4, R.Top+FGridLineWidth/4, HostW, HostH);
   FEditorHost.Visible:=True;
   FEditorHost.BringToFront;
 
@@ -6309,15 +6323,36 @@ begin
   if Field=nil then Exit;
 
   case Field.DataType of
-    ftByte:     begin AMin:=0;          AMax:=255;         end;
-    ftShortint: begin AMin:=-128;       AMax:=127;         end;
-    ftWord:     begin AMin:=0;          AMax:=65535;       end;
-    ftSmallint: begin AMin:=-32768;     AMax:=32767;       end;
-    ftLongWord: begin AMin:=0;          AMax:=4294967295;  end;
-    ftInteger:  begin AMin:=-2147483648; AMax:=2147483647; end;
+    ftByte:     begin
+      AMin:=0;
+      AMax:=255;
+    end;
+    ftShortint: begin
+      AMin:=-128;
+      AMax:=127;
+    end;
+    ftWord:     begin
+      AMin:=0;
+      AMax:=65535;
+    end;
+    ftSmallint: begin
+      AMin:=-32768;
+      AMax:=32767;
+    end;
+    ftLongWord: begin
+      AMin:=0;
+      AMax:=4294967295;
+    end;
+    ftInteger:  begin
+      AMin:=-2147483648;
+      AMax:=2147483647;
+    end;
     // 64-bit integers exceed Double's exact-integer range; use the wide
     // finite limit rather than the exact (unrepresentable) Int64 bounds.
-    ftLargeint: begin AMin:=-FLOAT_LIMIT; AMax:=FLOAT_LIMIT; end;
+    ftLargeint: begin
+      AMin:=-FLOAT_LIMIT;
+      AMax:=FLOAT_LIMIT;
+    end;
   else
     // ftFloat / ftCurrency / ftBCD / ftFMTBcd / ftSingle / ftExtended.
     AMin:=-FLOAT_LIMIT;
@@ -6335,44 +6370,30 @@ begin
 end;
 
 procedure TMultiHeaderDBGrid.EnsureTypedEditors;
-
-  // Hide the editor's border (ApplyStyle suppresses the 'background' style
-  // resource so only the opaque FEditorBack shows), then parent it into the
-  // host and wire the shared key/exit handlers.
-  procedure SetupEditor(C: TStyledControl);
-  begin
-    C.OnApplyStyleLookup:=ApplyStyle;
-    WireEditor(C);
-  end;
-
 begin
   if FComboEditor=nil then begin
     FComboEditor:=TComboBox.Create(Self);
-    SetupEditor(FComboEditor);
+    WireEditor(FComboEditor);
+    FComboEditor.StyleLookup:='mhg_editor_combo';
   end;
   if FNumberEditor=nil then begin
     FNumberEditor:=TEdit.Create(Self);
-    // Plain edit so the box can hold '' (SQL NULL). Border stripped via
-    // ApplyStyle in SetupEditor; numeric input enforced in NumberEditorKeyDown.
-    SetupEditor(FNumberEditor);
-    // SetupEditor wired the shared EditorKeyDown (Enter/Tab/Esc); chain the
-    // numeric filter in front of it.
+    WireEditor(FNumberEditor);
     FNumberEditor.OnKeyDown:=NumberEditorKeyDown;
-    // Numbers don't wrap: widen the column as the value grows while typing.
     FNumberEditor.OnChangeTracking:=NumberEditorChangeTracking;
+    FNumberEditor.StyleLookup:='mhg_editor_number';
   end;
   if FDateEditor=nil then begin
     FDateEditor:=TDateEdit.Create(Self);
-    // Compact, fixed-width date so the control doesn't reserve space for a
-    // long localized format (which left empty padding inside the box).
     FDateEditor.Format:='dd.MM.yyyy';
-    SetupEditor(FDateEditor);
+    WireEditor(FDateEditor);
+    FDateEditor.StyleLookup:='mhg_editor_date';
   end;
   if FTimeEditor=nil then begin
     FTimeEditor:=TTimeEdit.Create(Self);
-    // Show seconds; compact 24h layout keeps the box tight.
     FTimeEditor.Format:='HH:nn:ss';
-    SetupEditor(FTimeEditor);
+    WireEditor(FTimeEditor);
+    FTimeEditor.StyleLookup:='mhg_editor_time';
   end;
 
   // Capture the editors' default single-line height once, before any cell
@@ -6418,13 +6439,6 @@ begin
 end;
 
 function TMultiHeaderDBGrid.EditorMinColWidth(ACol, ARow: Integer): single;
-const
-  // Usable minimum widths (px) for the fixed-size typed editors. The memo and
-  // checkbox are comfortable in a narrow column, so they keep the default 0.
-  MINW_COMBO    = 120;
-  MINW_DATE     = 83;  // 'dd.MM.yyyy'
-  MINW_TIME     = 95;  // 'HH:nn:ss' plus picker button
-  MINW_DATETIME = 156; // date + time composite
 begin
   Result:=0;
   var Field:=FieldForCol(ACol);
@@ -6896,10 +6910,12 @@ begin
 
   if Composite and (FDateEditor<>nil) and (FTimeEditor<>nil) then begin
     // Split the host width, biasing the date editor a little wider than time.
-    var DateW:=AWidth/2+4;
-    var TimeW:=AWidth-DateW;
-    FDateEditor.SetBounds(0, OffY-2, DateW, EdH+2);
-    FTimeEditor.SetBounds(DateW, OffY-2, TimeW, EdH+2);
+
+    var Center:=AWidth/2+(MINW_DATE-MINW_TIME)/2;
+
+    FDateEditor.SetBounds(Center-MINW_DATE, OffY, MINW_DATE, EdH);
+    FTimeEditor.SetBounds(Center, OffY, MINW_TIME, EdH);
+
     FDateEditor.Visible:=True;
     FTimeEditor.Visible:=True;
     FDateEditor.BringToFront;
@@ -6994,6 +7010,196 @@ begin
     CleanUpCache;
   end;
 end;
+
+function CreateMemoStyle: TLayout;
+begin
+  Result := TLayout.Create(nil);
+  Result.StyleName := 'mhg_editor_memo';
+
+  var Content := TLayout.Create(Result);
+  Content.Parent := Result;
+  Content.StyleName := 'content';
+  Content.Align := TAlignLayout.Client;
+  Content.Margins.Left:=2;
+  Content.Margins.Right:=2;
+  Content.Margins.Top:=3;
+  Content.Margins.Bottom:=2;
+end;
+
+function CreateNumberStyle: TLayout;
+begin
+  Result := TLayout.Create(nil);
+  Result.StyleName := 'mhg_editor_number';
+
+  var Content := TLayout.Create(Result);
+  Content.Parent := Result;
+  Content.StyleName := 'content';
+  Content.Align := TAlignLayout.Client;
+  Content.Margins.Top:=1;
+end;
+
+function CreateComboStyle: TLayout;
+begin
+  Result := TLayout.Create(nil);
+  Result.StyleName := 'mhg_editor_combo';
+
+  var Content := TLayout.Create(Result);
+  Content.StyleName := 'content';
+  Content.Align := TAlignLayout.Client;
+  Content.Margins.Right := 16; // leave room for the arrow
+
+  var Arrow := TPath.Create(nil);
+  Arrow.Parent := Result;
+  Arrow.StyleName := 'arrow';
+  Arrow.Align := TAlignLayout.Right;
+  Arrow.Width := 16;
+  Arrow.Data.Data := 'M0,0 L8,0 L4,5 z';
+  Arrow.Fill.Color := TAlphaColors.Gray;
+  Arrow.WrapMode := TPathWrapMode.Fit;
+end;
+
+function CreateDateStyle: TLayout;
+begin
+  Result := TLayout.Create(nil);
+  Result.StyleName := 'mhg_editor_date';
+
+  var Text := TActiveStyleTextObject.Create(Result);
+  Text.Parent := Result;
+  Text.StyleName := 'Text';
+  Text.Align := TAlignLayout.Client;
+  Text.TextSettings.HorzAlign := TTextAlign.Trailing;
+  Text.Locked := True;
+  Text.Margins.Left := 2;
+  Text.Margins.Right := 0;
+  Text.Margins.Top := 0;
+  Text.Margins.Bottom := 0;
+  Text.Size.PlatformDefault := False;
+  Text.Text := 'Text';
+  Text.ShadowVisible := False;
+  Text.ActiveTrigger := TStyleTrigger.Focused;
+  Text.ActiveColor := TAlphaColorRec.Black;
+  Text.Cursor:=crIBeam;
+
+  var Selection:=TBrushObject.Create(Result);
+  Selection.StyleName := 'selection';
+  Selection.Brush.Color := $7F2A96FF;
+
+  var CalendarButton := TButton.Create(Result);
+  CalendarButton.Parent := Result;
+  CalendarButton.StyleName := 'arrow';
+  CalendarButton.Align := TAlignLayout.MostRight;
+  CalendarButton.CanFocus := False;
+  CalendarButton.Margins.Top := 1;
+  CalendarButton.Margins.Bottom := 1;
+  CalendarButton.Width := 12;
+  CalendarButton.Cursor := crHandPoint;
+
+  var Glyph := TPath.Create(CalendarButton);
+  Glyph.Parent := CalendarButton;
+  Glyph.StyleName := 'arrowglyph';
+  Glyph.Align := TAlignLayout.Client;
+  Glyph.HitTest := False;
+  Glyph.Margins.Left := 3;
+  Glyph.Margins.Right := 3;
+  Glyph.Margins.Top := 4;
+  Glyph.Margins.Bottom := 4;
+  Glyph.Data.Data := 'M0,0 L8,0 L4,5 z';
+  Glyph.Fill.Color := TAlphaColors.Gray;
+  Glyph.WrapMode := TPathWrapMode.Fit;
+end;
+
+function CreateTimeStyle: TLayout;
+begin
+  Result := TLayout.Create(nil);
+  Result.StyleName := 'mhg_editor_time';
+
+  var Text := TActiveStyleTextObject.Create(Result);
+  Text.Parent := Result;
+  Text.StyleName := 'Text';
+  Text.Align := TAlignLayout.Client;
+  Text.TextSettings.HorzAlign := TTextAlign.Trailing;
+  Text.Locked := True;
+  Text.Margins.Left := 2;
+  Text.Margins.Top := 0;
+  Text.Margins.Right := 0;
+  Text.Margins.Bottom := 0;
+  Text.Size.PlatformDefault := False;
+  Text.Text := 'Text';
+  Text.ShadowVisible := False;
+  Text.ActiveTrigger := TStyleTrigger.Focused;
+  Text.ActiveColor := TAlphaColorRec.Black;
+  Text.Cursor:=crIBeam;
+
+  var Selection:=TBrushObject.Create(Result);
+  Selection.StyleName := 'selection';
+  Selection.Brush.Color := $7F2A96FF;
+
+  var UpDown:=TGridLayout.Create(Result);
+  UpDown.Parent := Result;
+  UpDown.Align := TAlignLayout.MostRight;
+  UpDown.ItemHeight := -1;
+  UpDown.Orientation := TOrientation.Vertical;
+  UpDown.Margins.Top := 1;
+  UpDown.Margins.Bottom := 1;
+  UpDown.Margins.Right := 1;
+  UpDown.Width := 14;
+
+  var TopLayout := TLayout.Create(UpDown);
+  TopLayout.Parent := UpDown;
+
+  var UpButton := TButton.Create(TopLayout);
+  UpButton.Parent := TopLayout;
+  UpButton.StyleName := 'upbutton';
+  UpButton.Align := TAlignLayout.Client;
+  UpButton.CanFocus := False;
+
+  var UpArrow := TPath.Create(UpButton);
+  UpArrow.Parent := UpButton;
+  UpArrow.Align := TAlignLayout.Center;
+  UpArrow.Width := 7;
+  UpArrow.Height := 4;
+  UpArrow.HitTest := False;
+  UpArrow.Data.Data := 'M0,4 L3.5,0 L7,4 Z';
+  UpArrow.Fill.Color := TAlphaColorRec.Black;
+  UpArrow.Stroke.Kind := TBrushKind.None;
+  UpArrow.Cursor := crHandPoint;
+
+  var BottomLayout := TLayout.Create(UpDown);
+  BottomLayout.Parent := UpDown;
+  BottomLayout.Position.Y := 8;
+
+  var DownButton := TButton.Create(BottomLayout);
+  DownButton.Parent := BottomLayout;
+  DownButton.StyleName := 'downbutton';
+  DownButton.Align := TAlignLayout.Client;
+  DownButton.CanFocus := False;
+  DownButton.StyleLookup := 'spindownbutton';
+  DownButton.Cursor := crHandPoint;
+
+  var DownArrow := TPath.Create(DownButton);
+  DownArrow.Parent := DownButton;
+  DownArrow.Align := TAlignLayout.Center;
+  DownArrow.Width := 7;
+  DownArrow.Height := 4;
+  DownArrow.HitTest := False;
+  DownArrow.Data.Data := 'M0,0 L7,0 L3.5,4 Z';
+  DownArrow.Fill.Color := TAlphaColorRec.Black;
+  DownArrow.Stroke.Kind := TBrushKind.None;
+end;
+
+initialization
+  MemoStyle:=CreateMemoStyle;
+  NumberStyle:=CreateNumberStyle;
+  ComboStyle:=CreateComboStyle;
+  DateStyle:=CreateDateStyle;
+  TimeStyle:=CreateTimeStyle;
+
+finalization
+  MemoStyle.Free;
+  NumberStyle.Free;
+  ComboStyle.Free;
+  DateStyle.Free;
+  TimeStyle.Free;
 
 end.
 

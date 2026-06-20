@@ -11,3 +11,10 @@ __recovery
 Win32
 *.dcu
 *.exe
+/Test/*.drc
+/Test/*.deployproj
+/Test/*.tmp
+/Test/*.map
+/Test/*.mes
+/Test/Test
+/Test/Linux64/Release/*.o
