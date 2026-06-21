@@ -1,4 +1,4 @@
-Lightweight Delphi FMX VCL-like Grid.
+Delphi FMX VCL-like Grid.
 
 Support headers, merged cells and styles.  
 
