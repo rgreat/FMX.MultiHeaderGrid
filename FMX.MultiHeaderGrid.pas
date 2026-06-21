@@ -160,7 +160,6 @@ type
   THeaderLevel = class(TObjectList<THeaderElement>)
     FHeight: Integer;
     procedure SetHeight(const Value: Integer);
-    function GetColumnsToSkip: TArray<Boolean>;
   public
     FLevels : THeaderLevels;
     constructor Create(HeaderLevels: THeaderLevels; InsertBefore: integer = -1);
@@ -394,14 +393,6 @@ type
       // Inplace cell editor (basic grids). A single reusable TMemo is moved
       // over the cell being edited.
       FEditor: TMemo;
-      // True once the memo's FMX style has been applied at least once (set in
-      // ApplyStyle). Until then FEditor.ContentBounds is unreliable.
-      FEditorStyled: Boolean;
-      // Set when a basic/string-grid edit starts before the memo is styled;
-      // consumed in Paint to re-place the editor on the first frame where
-      // ContentBounds is valid (fixes the ~10 px first-edit offset). Not used by
-      // the DB grid, whose memo placement (LayoutMemoEditor) is style-independent.
-      FEditorRepositionPending: Boolean;
       FEditorHost: TLayout;
       // Currently active inplace editor control. For the base/string grids
       // this is always FEditor (the TMemo). The DB grid may swap in a typed
@@ -416,6 +407,10 @@ type
       // original) when editing ends. FEditWidenAnchor<0 means "none".
       FEditWidenAnchor: Integer;
       FEditWidenStartW: Integer;
+      // When True a column transiently widened to fit the inplace editor keeps
+      // its enlarged width when editing ends; when False (default) it is fully
+      // restored to its pre-edit width.
+      FKeepEditorWidenedColumn: Boolean;
       FReadOnly: Boolean;
       FPainted: boolean;
 
@@ -450,7 +445,7 @@ type
     // Widens the editing cell's (anchor) column if EditorMinColWidth needs more
     // room than it currently has. Called at edit start and re-callable while a
     // non-wrapping editor's content grows (e.g. typing a long number).
-    procedure WidenColForEditor(ACol, ARow: Integer);
+    procedure WidenColForEditor(ACol, ARow: Integer); virtual;
     // Called when editing ends: shrinks a transiently-widened anchor column to
     // ATargetW (the final value's needed width), but never below its pre-edit
     // width. ATargetW<0 restores the pre-edit width (cancel).
@@ -465,12 +460,6 @@ type
     // host interior size, and shows it. Base fills the host with the
     // Client-aligned TMemo; the DB grid overrides for its typed editors.
     procedure LayoutActiveEditor(AWidth, AHeight: Single); virtual;
-    // True if the active editor's vertical placement depends on the memo's
-    // styled FEditor.ContentBounds (basic/string grids). When True the first
-    // edit defers a re-position to Paint, because ContentBounds is only valid
-    // after the style applies. The DB grid measures independently in
-    // LayoutMemoEditor, so it overrides this to False and needs no deferral.
-    function  EditorUsesStyledContentBounds: Boolean; virtual;
     // Takes down the editor UI: hides the host (and its FEditorBack child) and
     // the active editor. Descendants override to hide their extra editors too.
     procedure HideEditor; virtual;
@@ -479,9 +468,7 @@ type
     procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
                             Shift: TShiftState);
     procedure EditorExit(Sender: TObject); virtual;
-    // Hides a control's painted border/background so the editor blends into the
-    // cell.
-    procedure ApplyStyle(Sender: TObject);
+
     // Grows (or shrinks) the row being edited so it fits the editor's current text,
     // then re-lays the editor out within the resized cell. Fires on every keystroke
     // via FEditor.OnChange while the cell content is still uncommitted, so we
@@ -753,6 +740,10 @@ type
     property RowSelect: Boolean read FRowSelect write SetRowSelect default False;
     // When True the inplace cell editor is disabled and the grid is view-only.
     property ReadOnly: Boolean read FReadOnly write SetReadOnly default False;
+    // A column may be transiently widened to fit the inplace editor. When False
+    // (default) the column returns to its pre-edit width when editing ends; when
+    // True it keeps the enlarged width.
+    property KeepEditorWidenedColumn: Boolean read FKeepEditorWidenedColumn write FKeepEditorWidenedColumn default False;
     property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
@@ -941,6 +932,9 @@ type
       // Natural single-line height of the typed editors, captured at creation
       // before any cell layout stretches them.
       FTypedEditorHeight: Single;
+      // Transient extra width (clear-button footprint) added to a date/time
+      // editor's measured min column width during WidenColForEditor only.
+      FEditorExtraWidth: Single;
 
     function GetDataSource: TDataSource;
     procedure SetDataSource(const Value: TDataSource);
@@ -978,21 +972,32 @@ type
     // --- Typed editor overrides (see base hooks) ------------------------
     function  PrepareCellEditor(ACol, ARow: Integer): TControl; override;
     procedure LayoutActiveEditor(AWidth, AHeight: Single); override;
-    // The DB grid's ekMemo placement (LayoutMemoEditor) is style-independent, so
-    // it doesn't need the basic grids' deferred first-edit re-position.
-    function  EditorUsesStyledContentBounds: Boolean; override;
     // Self-contained placement of the shared TMemo for ekMemo cells. A private
     // copy of the base logic (the DB grid does NOT call inherited for the memo),
     // so the DB and base/string grids can be fixed independently.
     procedure LayoutMemoEditor(AWidth, AHeight: Single);
     procedure HideEditor; override;
+    // Footprint of the styled clear button (its Width plus left/right margins),
+    // read from the captured 'clearbutton' style instance so column widening tracks
+    // whatever the style defines. The date control's button serves ekDate and the
+    // ekDateTime composite; the time control's button serves ekTime. Returns 0 when
+    // the style hasn't resolved yet (first frame) or no button applies - the column
+    // re-measures on the next layout once the instance is captured.
+    function ClearButtonWidth(Field: TField): single;
     procedure CancelEditing; override;
     procedure EditorExit(Sender: TObject); override;
+    procedure OnDateEditorClear(Sender: TObject);
+    procedure OnTimeEditorClear(Sender: TObject);
     procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); override;
     function  GetEditorText: string; override;
     function  CommitEditorValue(ACol, ARow: Integer): Boolean; override;
     procedure PlaceEditorCaretAtEnd(Ed: TControl); override;
     function  EditorMinColWidth(ACol, ARow: Integer): single; override;
+    // The clear button on nullable TDateEdit/TTimeEdit editors takes extra
+    // horizontal room that the base EditorMinColWidth (via MINW_*) doesn't
+    // account for. Widen the column by that footprint so the button isn't
+    // clipped. (WidenColForEditor only runs in the base, so override here.)
+    procedure WidenColForEditor(ACol, ARow: Integer); override;
     // Field bound to a given grid column (nil if out of range / no dataset).
     function  FieldForCol(ACol: Integer): TField;
     // Editor kind for a field, from DataType / FieldKind / ReadOnly.
@@ -1089,7 +1094,7 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, System.Diagnostics, FMX.Styles, FMX.Styles.Objects;
+  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, FMX.Styles, FMX.Styles.Objects;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -1145,7 +1150,6 @@ function THeaderLevel.AddColumn(Caption: string = '';
                                 ColSpan: Integer = 1;
                                 RowSpan: Integer = 1): THeaderElement;
 begin
-//  var SkipCols:=GetColumnsToSkip;
   Result:=THeaderElement.Create(Self);
   Result.Caption:=Caption;
   Result.ColSpan:=ColSpan;
@@ -1201,37 +1205,6 @@ end;
 procedure THeaderLevel.SetHeight(const Value: Integer);
 begin
   FHeight:=Value;
-end;
-
-function THeaderLevel.GetColumnsToSkip: TArray<Boolean>;
-var
-  i, j, k, Col: Integer;
-  Element: THeaderElement;
-begin
-  // Create an array to track occupied columns
-  SetLength(Result, FLevels.Grid.ColCount);
-  for i:=0 to High(Result) do begin
-    Result[i]:=False;
-  end;
-
-  var LevelIndex:=FLevels.IndexOf(Self);
-
-  // Iterate over all levels above the current one
-  for i:=0 to LevelIndex-1 do begin
-    for j:=0 to FLevels[i].Count-1 do begin
-      Element:=FLevels[i][j];
-      // If the element spans multiple rows and its RowSpan reaches the current level
-      if (Element.RowSpan>1) and (i+Element.RowSpan>LevelIndex) then begin
-        // Mark all columns occupied by this element
-        for k:=0 to Element.ColSpan-1 do begin
-          Col:=Element.ColSkip+k;
-          if Col<Length(Result) then begin
-            Result[Col]:=True;
-          end;
-        end;
-      end;
-    end;
-  end;
 end;
 
 { THeaderLevels }
@@ -2137,22 +2110,6 @@ begin
   end;
 
   inherited;
-
-  // Consume a deferred first-edit re-position for the basic/string grids (see
-  // StartCellEditing). Once a frame has painted, the memo's style has applied and
-  // FEditor.ContentBounds is valid, so re-placing now lands the editor where
-  // later edits do. If the style hasn't applied yet this frame, keep the request
-  // and ask for another frame.
-  if FEditorRepositionPending then begin
-    if FEditorStyled then begin
-      FEditorRepositionPending:=False;
-      if FEditing and (ActiveEditorControl=FEditor) then
-        PositionEditor;
-    end
-    else
-      Invalidate;
-  end;
-
   FPainted:=True;
 end;
 
@@ -4257,24 +4214,6 @@ begin
   WireEditor(FEditor); // parent into host + wire OnKeyDown/OnExit
 end;
 
-procedure TMultiHeaderGrid.ApplyStyle(Sender: TObject);
-var
-  Obj: TFmxObject;
-begin
-  // Hide the styled background entirely (this is what paints the
-  // border). The opaque FEditorBack rectangle supplies the fill instead.
-  if not Assigned(Sender) or not (Sender is TStyledControl) then Exit;
-
-  var Ctrl:=TStyledControl(Sender);
-  Obj:=Ctrl.FindStyleResource('background');
-  if Obj is TControl then
-    TControl(Obj).Opacity:=0;
-
-  // The shared memo's style is now applied, so FEditor.ContentBounds is reliable.
-  if Sender=FEditor then
-    FEditorStyled:=True;
-end;
-
 procedure TMultiHeaderGrid.MemoEditorTextChanged(Sender: TObject);
 // Live re-fit of the edited row. A row's height is the max over ALL columns, so
 // (1) AutoSizeRows sizes it from every cell's committed text (this also shrinks
@@ -4445,12 +4384,7 @@ begin
     // honour TextVAlignment we shift the whole control down by the slack
     // between the cell height and the text height. Center -> half the slack,
     // Trailing -> all of it, Leading -> none.
-    //
-    // TextH comes from FEditor.ContentBounds, which the -3/+8 baseline nudge
-    // below is calibrated against. ContentBounds is only valid once the memo's
-    // FMX style has applied; on the very first edit it reads too large, so the
-    // first placement is corrected by a deferred re-position in Paint (see
-    // FEditorRepositionPending) once the style is in effect.
+
     var TextH:=FEditor.ContentBounds.Height;
     var Slack:=AHeight - TextH;
     if Slack<0 then Slack:=0;
@@ -4475,7 +4409,6 @@ procedure TMultiHeaderGrid.HideEditor;
 begin
   // Hiding the host hides its FEditorBack child too. Descendants override to
   // also hide any extra editors they parented into the host.
-  FEditorRepositionPending:=False; // editor going away - drop any deferred move
   if FEditorHost<>nil then FEditorHost.Visible:=False;
   var Ed:=ActiveEditorControl;
   if Ed<>nil then Ed.Visible:=False;
@@ -4538,23 +4471,6 @@ begin
   if Ed.CanFocus then
     Ed.SetFocus;
   PlaceEditorCaretAtEnd(Ed);
-
-  // First edit on the basic/string grids: the PositionEditor above read a stale
-  // FEditor.ContentBounds (style not applied yet) and placed the text ~10 px too
-  // low. Defer a re-position to the next Paint, by which point the style has
-  // applied and ContentBounds is valid. The DB grid measures independently
-  // (EditorUsesStyledContentBounds=False), so it is unaffected.
-  if (ActiveEditorControl=FEditor) and (not FEditorStyled) and
-     EditorUsesStyledContentBounds then begin
-    FEditorRepositionPending:=True;
-    Invalidate; // ensure a Paint happens to consume the pending re-position
-  end;
-end;
-
-function TMultiHeaderGrid.EditorUsesStyledContentBounds: Boolean;
-begin
-  // Basic/string grids place the memo from FEditor.ContentBounds.
-  Result:=True;
 end;
 
 procedure TMultiHeaderGrid.WidenColForEditor(ACol, ARow: Integer);
@@ -4610,21 +4526,24 @@ end;
 
 procedure TMultiHeaderGrid.FinishEditColWidth(ATargetW: Integer);
 // Called when editing ends. If the anchor column was transiently widened for
-// the editor, shrink it to ATargetW (the width the final value needs) but never
-// below the width it had before editing started. ATargetW<0 means "restore the
-// pre-edit width" (used on cancel).
+// the editor:
+//   - ATargetW<0 (cancel): always restore the pre-edit width.
+//   - otherwise (commit): if KeepEditorWidenedColumn is True the enlarged width
+//     is kept; if False (default) the column is restored to its pre-edit width.
+// This avoids the inconsistent "shrink partway back" behaviour: the column
+// either fully returns to its original width or fully keeps the enlargement.
 begin
   if FEditWidenAnchor<0 then Exit; // never widened this edit
 
   var Anchor:=FEditWidenAnchor;
   FEditWidenAnchor:=-1; // consume
 
-  var NewW:=ATargetW;
-  if (NewW<0) or (NewW<FEditWidenStartW) then
-    NewW:=FEditWidenStartW; // don't shrink below the original width
+  // Keep the enlarged width on a normal commit when requested.
+  if (ATargetW>=0) and FKeepEditorWidenedColumn then Exit;
 
-  if NewW<GetColWidth(Anchor) then
-    ColWidths[Anchor]:=NewW; // SetColWidth clamps to Min/MaxWidth
+  // Otherwise restore the pre-edit width.
+  if FEditWidenStartW<GetColWidth(Anchor) then
+    ColWidths[Anchor]:=FEditWidenStartW; // SetColWidth clamps to Min/MaxWidth
 end;
 
 procedure TMultiHeaderGrid.CommitEditing;
@@ -4641,9 +4560,9 @@ begin
   // would double-write and force an unparsed string into a typed field.
   CommitEditorValue(Col, Row);
 
-  // Editing widened the column to fit the in-progress value; now shrink it back
-  // to fit the committed value (EditorMinColWidth re-measures the stored text
-  // since the editor is hidden), but not below its pre-edit width.
+  // Editing widened the column to fit the in-progress value. By default the
+  // column now returns to its pre-edit width; set KeepEditorWidenedColumn to
+  // keep the enlargement instead. (ATargetW>=0 selects the commit branch.)
   FinishEditColWidth(Trunc(EditorMinColWidth(Col, Row)));
 
   FActiveEditor:=nil;
@@ -6401,6 +6320,25 @@ begin
       Exit(FColumns[i]);
 end;
 
+procedure TMultiHeaderDBGrid.OnDateEditorClear(Sender: TObject);
+begin
+  FDateEditor.IsEmpty:=True;
+  EditorExit(Sender);
+end;
+
+procedure TMultiHeaderDBGrid.OnTimeEditorClear(Sender: TObject);
+begin
+  if FEditing then begin
+    if IsCompositeEditor(Sender) then begin
+      FDateEditor.IsEmpty:=True;
+      FTimeEditor.IsEmpty:=True;
+    end else begin
+      FTimeEditor.IsEmpty:=True;
+    end;
+  end;
+  EditorExit(Sender);
+end;
+
 procedure TMultiHeaderDBGrid.EnsureTypedEditors;
 begin
   if FComboEditor=nil then begin
@@ -6421,6 +6359,11 @@ begin
     WireEditor(FDateEditor);
     FDateEditor.OnKeyDown:=DateTimeEditorKeyDown;
     FDateEditor.StyleLookup:='mhg_editor_date';
+
+    var Button:=TButton(FDateEditor.FindStyleResource('mhgclearbutton'));
+    if Assigned(Button) then begin
+      Button.OnClick:=OnDateEditorClear;
+    end;
   end;
   if FTimeEditor=nil then begin
     FTimeEditor:=TTimeEdit.Create(Self);
@@ -6428,6 +6371,11 @@ begin
     WireEditor(FTimeEditor);
     FTimeEditor.OnKeyDown:=DateTimeEditorKeyDown;
     FTimeEditor.StyleLookup:='mhg_editor_time';
+
+    var Button:=TButton(FTimeEditor.FindStyleResource('mhgclearbutton'));
+    if Assigned(Button) then begin
+      Button.OnClick:=OnTimeEditorClear;
+    end;
   end;
 
   // Capture the editors' default single-line height once, before any cell
@@ -6662,9 +6610,9 @@ begin
 
   case EditorKindForField(Field) of
     ekComboBox: Result:=MINW_COMBO+FGridLineWidth/2;
-    ekDate:     Result:=MINW_DATE+FGridLineWidth/2;
-    ekTime:     Result:=MINW_TIME+FGridLineWidth/2;
-    ekDateTime: Result:=MINW_DATETIME+FGridLineWidth/2;
+    ekDate:     Result:=MINW_DATE+FGridLineWidth/2+FEditorExtraWidth;
+    ekTime:     Result:=MINW_TIME+FGridLineWidth/2+FEditorExtraWidth;
+    ekDateTime: Result:=MINW_DATETIME+FGridLineWidth/2+FEditorExtraWidth;
     ekNumber:
       begin
         // Numbers must not wrap: make the column wide enough to show the whole
@@ -6689,6 +6637,38 @@ begin
       end;
   else
     Result:=0; // ekMemo / ekCheckBox / ekNone
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.WidenColForEditor(ACol, ARow: Integer);
+// EditorMinColWidth returns the MINW_* base footprint for date/time editors,
+// but a nullable field also shows a clear button (see LayoutActiveEditor) that
+// EditorMinColWidth doesn't include. Temporarily fold that footprint into the
+// measurement so the base widening logic accounts for it, then restore.
+var
+  Field: TField;
+  Extra: single;
+begin
+  Extra:=0;
+  Field:=FieldForCol(ACol);
+  if Field<>nil then begin
+    var Nullable:=(not Field.Required) and (not Field.ReadOnly);
+    if Nullable then
+      case EditorKindForField(Field) of
+        ekDate, ekTime, ekDateTime: Extra:=ClearButtonWidth(Field);
+      end;
+  end;
+
+  if Extra<=0 then begin
+    inherited WidenColForEditor(ACol, ARow);
+    Exit;
+  end;
+
+  FEditorExtraWidth:=Extra;
+  try
+    inherited WidenColForEditor(ACol, ARow);
+  finally
+    FEditorExtraWidth:=0;
   end;
 end;
 
@@ -6936,21 +6916,23 @@ begin
     ekComboBox:
       FComboEditor.ItemIndex:=FComboEditor.Items.IndexOf(Field.AsString);
 
-    ekDate:
+    ekDate: begin
       if Field.IsNull then FDateEditor.Date:=Now
       else FDateEditor.Date:=Field.AsDateTime;
-
-    ekTime:
+      FDateEditor.IsEmpty:=False;
+    end;
+    ekTime: begin
       if Field.IsNull then FTimeEditor.Time:=Now
       else FTimeEditor.Time:=Field.AsDateTime;
-
-    ekDateTime:
-      begin
+      FTimeEditor.IsEmpty:=False;
+    end;
+    ekDateTime: begin
         var V: TDateTime;
         if Field.IsNull then V:=Now else V:=Field.AsDateTime;
         FDateEditor.Date:=V;
         FTimeEditor.Time:=V;
-        // Visibility/placement of both controls is handled by LayoutActiveEditor.
+        FDateEditor.IsEmpty:=False;
+        FTimeEditor.IsEmpty:=False;
       end;
   end;
 end;
@@ -7018,18 +7000,23 @@ var
           if FComboEditor.ItemIndex>=0 then
             Field.AsString:=FComboEditor.Selected.Text;
         ekDate:
-          // Pure ftDate -> midnight. A datetime field shown date-only keeps
-          // its existing time component (only the date part is replaced).
-          if Field.DataType in [ftDateTime, ftTimeStamp, ftOraTimeStamp] then begin
-            var OldTime: TDateTime;
-            if Field.IsNull then OldTime:=0 else OldTime:=Frac(Field.AsDateTime);
-            Field.AsDateTime:=Trunc(FDateEditor.Date)+OldTime;
-          end else
+          if FDateEditor.IsEmpty then begin
+            Field.Clear;
+          end else begin
             Field.AsDateTime:=Trunc(FDateEditor.Date);
+          end;
         ekTime:
-          Field.AsDateTime:=Frac(FTimeEditor.Time);
+          if FTimeEditor.IsEmpty then begin
+            Field.Clear;
+          end else begin
+            Field.AsDateTime:=Frac(FTimeEditor.Time);
+          end;
         ekDateTime:
-          Field.AsDateTime:=Trunc(FDateEditor.Date)+Frac(FTimeEditor.Time);
+          if FTimeEditor.IsEmpty then begin
+            Field.Clear;
+          end else begin
+            Field.AsDateTime:=Trunc(FDateEditor.Date)+Frac(FTimeEditor.Time);
+          end;
       else
         // ekMemo and any text path: round-trip via AsString.
         Field.AsString:=GetEditorText;
@@ -7101,18 +7088,49 @@ begin
   FEditField:=nil;
 end;
 
-procedure TMultiHeaderDBGrid.LayoutActiveEditor(AWidth, AHeight: Single);
-
-  // Single-line typed editors must not be stretched to a tall (multiline /
-  // row-spanned) cell. Cap the height at the editor's natural single-line
-  // height and top-align it; a short cell still fills normally.
-  function EditorHeight: Single;
-  begin
-    Result:=AHeight;
-    if (FTypedEditorHeight>0) and (FTypedEditorHeight<Result) then
-      Result:=FTypedEditorHeight;
+function TMultiHeaderDBGrid.ClearButtonWidth(Field: TField): single;
+// Footprint of the styled clear button (its Width plus left/right margins),
+// read from the captured 'clearbutton' style instance so column widening tracks
+// whatever the style defines. The date control's button serves ekDate and the
+// ekDateTime composite; the time control's button serves ekTime. Returns 0 when
+// the style hasn't resolved yet (first frame) or no button applies - the column
+// re-measures on the next layout once the instance is captured.
+var
+  Control: TControl;
+begin
+  Result:=0;
+  if Field=nil then Exit;
+  case EditorKindForField(Field) of
+    ekDate, ekDateTime: Control:=FDateEditor;
+    ekTime:             Control:=FTimeEditor;
+  else
+    Control:=nil;
   end;
+  if Control<>nil then begin
+    var Button:=TButton(Control.FindStyleResource('mhgclearbutton'));
+    if Assigned(Button) then begin
+      Result:=Button.Width+Button.Margins.Left+Button.Margins.Right;
+    end;
+  end;
+end;
 
+function GetClearButtonWidth(Control: TControl): single;
+begin
+  var Button:=TButton(Control.FindStyleResource('mhgclearbutton'));
+  if Assigned(Button) then begin
+    Result:=Button.Width+Button.Margins.Left+Button.Margins.Right;
+  end;
+end;
+
+procedure SetEditorClearButton(Control: TControl; Visible: boolean);
+begin
+  var Button:=TButton(Control.FindStyleResource('mhgclearbutton'));
+  if Assigned(Button) then begin
+    Button.Visible:=Visible;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.LayoutActiveEditor(AWidth, AHeight: Single);
 begin
   if (FEditorHost=nil) or not FEditorHost.Visible then Exit;
 
@@ -7136,7 +7154,10 @@ begin
   HideTypedEditors(Ed, Composite);
   if FEditor<>nil then FEditor.Visible:=False;
 
-  var EdH:=EditorHeight;
+  var EdH:=AHeight;
+  if (FTypedEditorHeight>0) and (FTypedEditorHeight<EdH) then begin
+    EdH:=FTypedEditorHeight;
+  end;
 
   // The plain-edit number editor mirrors the cell's font the way the base does
   // for the TMemo (face/size/style/colour from the effective cell style), so
@@ -7165,31 +7186,63 @@ begin
     OffY:=0; // Leading
   end;
 
+  var ClearButtonWidth:=0.0;
+  case EditorKindForField(FEditField) of
+    ekDate: begin
+      ClearButtonWidth:=GetClearButtonWidth(FDateEditor);
+    end;
+    ekTime, ekDateTime: begin
+      ClearButtonWidth:=GetClearButtonWidth(FTimeEditor);
+    end;
+  end;
+
+  var FieldIsNullable:=(FEditField<>nil) and (not FEditField.Required) and (not FEditField.ReadOnly);
+
+  if not FieldIsNullable then ClearButtonWidth:=0;
+
   if Composite and (FDateEditor<>nil) and (FTimeEditor<>nil) then begin
     // Split the host width, biasing the date editor a little wider than time.
 
-    var Center:=AWidth/2+(MINW_DATE-MINW_TIME)/2;
+    SetEditorClearButton(FDateEditor,False);
+    SetEditorClearButton(FTimeEditor,FieldIsNullable);
+
+    var Center:=AWidth/2+(MINW_DATE-(MINW_TIME+ClearButtonWidth))/2;
 
     FDateEditor.SetBounds(Center-MINW_DATE, OffY, MINW_DATE, EdH);
-    FTimeEditor.SetBounds(Center, OffY, MINW_TIME, EdH);
+    FTimeEditor.SetBounds(Center, OffY, MINW_TIME+ClearButtonWidth, EdH);
 
     FDateEditor.Visible:=True;
     FTimeEditor.Visible:=True;
     FDateEditor.BringToFront;
     FTimeEditor.BringToFront;
-  end
-  else begin
-    Ed.SetBounds(0, OffY-2, AWidth, EdH+2); // fill width, natural height
+  end else begin
+    var X:=0.0;
+    var DY:=0.0;
+    var W:=AWidth;
+
+    if Ed=FNumberEditor then begin
+      DY:=-0.5;
+    end;
+    if Ed=FDateEditor then begin
+      SetEditorClearButton(FDateEditor,FieldIsNullable);
+      W:=MINW_DATE+IfThen(FieldIsNullable,ClearButtonWidth,0);
+
+      var Center:=(AWidth+W)/2;
+      X:=Center-W;
+    end;
+    if Ed=FTimeEditor then begin
+      SetEditorClearButton(FTimeEditor,FieldIsNullable);
+
+      W:=MINW_TIME+IfThen(FieldIsNullable,ClearButtonWidth,0);
+
+      var Center:=(AWidth+W)/2;
+      X:=Center-W;
+    end;
+
+    Ed.SetBounds(X, OffY+DY, W, EdH+DY); // fill width, natural height
     Ed.Visible:=True;
     Ed.BringToFront;
   end;
-end;
-
-function TMultiHeaderDBGrid.EditorUsesStyledContentBounds: Boolean;
-begin
-  // ekMemo cells are placed by LayoutMemoEditor, which measures text height
-  // independently of the memo's applied style - no deferred re-position needed.
-  Result:=False;
 end;
 
 procedure TMultiHeaderDBGrid.LayoutMemoEditor(AWidth, AHeight: Single);
@@ -7344,7 +7397,7 @@ begin
   var CalendarButton := TButton.Create(Result);
   CalendarButton.Parent := Result;
   CalendarButton.StyleName := 'arrow';
-  CalendarButton.Align := TAlignLayout.MostRight;
+  CalendarButton.Align := TAlignLayout.Right;
   CalendarButton.CanFocus := False;
   CalendarButton.Margins.Top := 1;
   CalendarButton.Margins.Bottom := 1;
@@ -7363,6 +7416,33 @@ begin
   Glyph.Data.Data := 'M0,0 L8,0 L4,5 z';
   Glyph.Fill.Color := TAlphaColors.Gray;
   Glyph.WrapMode := TPathWrapMode.Fit;
+
+  var ClearBtn := TButton.Create(Result);
+  ClearBtn.Parent := Result;
+  ClearBtn.StyleName := 'mhgclearbutton';
+  ClearBtn.Align := TAlignLayout.MostRight;
+  ClearBtn.CanFocus := False;
+  ClearBtn.Visible := True;
+  ClearBtn.Margins.Top := 1;
+  ClearBtn.Margins.Bottom := 1;
+  ClearBtn.Margins.Right := 1;
+  ClearBtn.Width := 14;
+  ClearBtn.Cursor := crHandPoint;
+  ClearBtn.Hint := 'Clear';
+
+  var ClearGlyph := TPath.Create(ClearBtn);
+  ClearGlyph.Parent := ClearBtn;
+  ClearGlyph.StyleName := 'clearglyph';
+  ClearGlyph.Align := TAlignLayout.Center;
+  ClearGlyph.Width := 9;
+  ClearGlyph.Height := 9;
+  ClearGlyph.HitTest := False;
+  ClearGlyph.WrapMode := TPathWrapMode.Stretch;
+  ClearGlyph.Fill.Kind := TBrushKind.None;
+  ClearGlyph.Stroke.Kind := TBrushKind.Solid;
+  ClearGlyph.Stroke.Color := TAlphaColorRec.Gray;
+  ClearGlyph.Stroke.Thickness := 1.5;
+  ClearGlyph.Data.Data := 'M0,0 L9,9 M9,0 L0,9';
 end;
 
 function CreateTimeStyle: TLayout;
@@ -7393,7 +7473,7 @@ begin
 
   var UpDown:=TGridLayout.Create(Result);
   UpDown.Parent := Result;
-  UpDown.Align := TAlignLayout.MostRight;
+  UpDown.Align := TAlignLayout.Right;
   UpDown.ItemHeight := -1;
   UpDown.Orientation := TOrientation.Vertical;
   UpDown.Margins.Top := 1;
@@ -7442,6 +7522,33 @@ begin
   DownArrow.Data.Data := 'M0,0 L7,0 L3.5,4 Z';
   DownArrow.Fill.Color := TAlphaColorRec.Black;
   DownArrow.Stroke.Kind := TBrushKind.None;
+
+  var ClearBtn := TButton.Create(Result);
+  ClearBtn.Parent := Result;
+  ClearBtn.StyleName := 'mhgclearbutton';
+  ClearBtn.Align := TAlignLayout.MostRight;
+  ClearBtn.CanFocus := False;
+  ClearBtn.Visible := True;
+  ClearBtn.Margins.Top := 1;
+  ClearBtn.Margins.Bottom := 1;
+  ClearBtn.Margins.Right := 1;
+  ClearBtn.Width := 14;
+  ClearBtn.Cursor := crHandPoint;
+  ClearBtn.Hint := 'Clear';
+
+  var ClearGlyph := TPath.Create(ClearBtn);
+  ClearGlyph.Parent := ClearBtn;
+  ClearGlyph.StyleName := 'clearglyph';
+  ClearGlyph.Align := TAlignLayout.Center;
+  ClearGlyph.Width := 9;
+  ClearGlyph.Height := 9;
+  ClearGlyph.HitTest := False;
+  ClearGlyph.WrapMode := TPathWrapMode.Stretch;
+  ClearGlyph.Fill.Kind := TBrushKind.None;
+  ClearGlyph.Stroke.Kind := TBrushKind.Solid;
+  ClearGlyph.Stroke.Color := TAlphaColorRec.Gray;
+  ClearGlyph.Stroke.Thickness := 1.5;
+  ClearGlyph.Data.Data := 'M0,0 L9,9 M9,0 L0,9';
 end;
 
 initialization
