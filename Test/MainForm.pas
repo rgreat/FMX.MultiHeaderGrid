@@ -319,7 +319,8 @@ begin
   Columns.SetColumnProps('klfl04',   'Mandatory 2 seats',     'Flags;Order rules');
 
   Columns.SetColumnProps('cor_tip',  'Type',                  'Correction');
-  Columns.SetColumnProps('cor_time', 'Time',                  'Correction');
+  Columns.SetColumnProps('cor_time', 'Time',                  'Correction').DisplayFormat:='DD.MM.YYYY HH:NN';
+  Columns.SetColumnProps('test_time', 'Test Time');
 
   for var Column in Columns do begin
     var HMGColumn:=TMHGColumn(Column);
@@ -330,6 +331,7 @@ begin
       ftWideString: HMGColumn.Color:=$FFFFF8DC;
       ftInteger:    HMGColumn.Color:=$FFB3FFFF;
       ftBoolean:    HMGColumn.Color:=$FFFFF6C7;
+      ftDate,ftTime,
       ftTimeStamp:  HMGColumn.Color:=$FFE5FFCA;
     end;
 

@@ -843,10 +843,12 @@ type
     FColor      : TAlphaColor;
     FColorIsSet : Boolean;
     FDateTimeEditor : TMHGDateTimeEditKind;
+    FDisplayFormat : string;
 
     function GetGrid: TMultiHeaderDBGrid;
     procedure SetFieldName(const Value: string);
     procedure SetColor(const Value: TAlphaColor);
+    procedure SetDisplayFormat(const Value: string);
     function IsColorStored: Boolean;
   protected
     function GetDisplayName: string; override;
@@ -866,6 +868,12 @@ type
     // date only. Ignored for non-datetime fields.
     property DateTimeEditor: TMHGDateTimeEditKind read FDateTimeEditor
       write FDateTimeEditor default dteDateTime;
+    // Per-column display format for the field -> cell-string conversion. When
+    // empty (the default), date/time/datetime fields use the grid's DateFormat
+    // / TimeFormat and all other fields use Field.AsString. When set, it is
+    // passed verbatim to FormatDateTime for date/time fields (e.g. 'YYYY-MM-DD',
+    // 'HH:NN'); ignored for non-datetime fields.
+    property DisplayFormat: string read FDisplayFormat write SetDisplayFormat;
   end;
 
   TMHGColumns = class(TOwnedCollection)
@@ -932,6 +940,12 @@ type
       FRowCacheSize: integer;
       FUpdatingRow: Boolean; // guards against recursion when syncing Row <-> DataSet.RecNo
       FColumns: TMHGColumns;
+      // Grid-wide default formats for the field -> cell-string conversion of
+      // date / time / datetime fields, used when a column has no explicit
+      // DisplayFormat. Passed to FormatDateTime. Defaults: 'DD.MM.YYYY' and
+      // 'HH:NN:SS'; datetime fields use DateFormat + ' ' + TimeFormat.
+      FDateFormat: string;
+      FTimeFormat: string;
       // Signature of the DataSet/table we last auto-created columns for, so
       // we only auto-create on a genuinely new source or a newly opened table
       // (different field set), not on every re-open of the same one.
@@ -975,6 +989,12 @@ type
     procedure SetDataSource(const Value: TDataSource);
     procedure SetRowCacheSize(const Value: integer);
     procedure SetColumns(const Value: TMHGColumns);
+    procedure SetDateFormat(const Value: string);
+    procedure SetTimeFormat(const Value: string);
+    // Converts a field's value to its displayed cell string, applying the
+    // per-column DisplayFormat or the grid DateFormat/TimeFormat for
+    // date/time/datetime fields; falls back to Field.AsString otherwise.
+    function FieldToText(ACol: TMHGColumn; AField: TField): string;
     procedure CleanUpCache;
     function GetVisibleFields: TArray<TField>;
     function GetRowData(ARow: Integer): TDBRowData;
@@ -1107,6 +1127,11 @@ type
     // Refresh, record insertion/deletion, etc.).
     procedure UpdateRowCount;
 
+    // Drops the cached cell strings (so they are re-rendered from the DataSet,
+    // e.g. after a display-format change) and repaints. Does not rebuild the
+    // header or change row count.
+    procedure RefreshCells;
+
     // Moves DataSet.RecNo to the selected grid row (Row).
     // Called automatically when the DataSet cursor moves.
     procedure SyncSelectedRowFromDataSet;
@@ -1127,6 +1152,12 @@ type
   published
     property DataSource: TDataSource read GetDataSource write SetDataSource;
     property RowCacheSize: integer read FRowCacheSize write SetRowCacheSize default 1000;
+    // Default display format for date and time field -> cell-string conversion,
+    // used when a column has no explicit DisplayFormat. Datetime fields combine
+    // them as DateFormat + ' ' + TimeFormat (or DateFormat alone when the
+    // column's DateTimeEditor is dteDate). Defaults: 'DD.MM.YYYY' / 'HH:NN:SS'.
+    property DateFormat: string read FDateFormat write SetDateFormat;
+    property TimeFormat: string read FTimeFormat write SetTimeFormat;
     // Declarative column definitions. The collection is authoritative:
     // the grid shows exactly these columns, in this order. An empty
     // collection means an empty grid - use AutoCreateColumns (or the
@@ -5592,6 +5623,7 @@ begin
     FColor:=C.FColor;
     FColorIsSet:=C.FColorIsSet;
     FDateTimeEditor:=C.FDateTimeEditor;
+    FDisplayFormat:=C.FDisplayFormat;
     Changed;
   end;
 end;
@@ -5637,6 +5669,18 @@ begin
     // header layout. So a full rebuild is unnecessary - just repaint.
     var G:=Grid;
     if G<>nil then G.Invalidate;
+  end;
+end;
+
+procedure TMHGColumn.SetDisplayFormat(const Value: string);
+begin
+  if FDisplayFormat<>Value then begin
+    FDisplayFormat:=Value;
+    // Only the rendered text of this column's data cells changes - not the
+    // column set/order/geometry. Drop the cached strings so they re-render
+    // with the new format, then repaint. No header rebuild needed.
+    var G:=Grid;
+    if G<>nil then G.RefreshCells;
   end;
 end;
 
@@ -5795,6 +5839,8 @@ begin
   inherited;
 
   FRowCacheSize:=1000;
+  FDateFormat:='DD.MM.YYYY';
+  FTimeFormat:='HH:NN:SS';
   FCellTexts:=TRowsData.Create(FRowCacheSize);
   FDataLink:=TMHGDataLink.Create(Self);
   FColumns:=TMHGColumns.Create(Self);
@@ -6005,6 +6051,69 @@ begin
   ResolveColumns(Result);
 end;
 
+function TMultiHeaderDBGrid.FieldToText(ACol: TMHGColumn; AField: TField): string;
+begin
+  if AField=nil then Exit('');
+  if AField.IsNull then Exit('');
+
+  // Only date/time-family fields are formatted; everything else keeps the
+  // field's native AsString (numbers, strings, booleans, etc.).
+  case AField.DataType of
+    ftDate, ftTime, ftDateTime, ftTimeStamp, ftOraTimeStamp: ;
+  else
+    Exit(AField.AsString);
+  end;
+
+  var DT:=AField.AsDateTime;
+
+  // A per-column DisplayFormat, when set, overrides the grid defaults and is
+  // applied verbatim regardless of the date/time sub-kind.
+  if (ACol<>nil) and (ACol.DisplayFormat<>'') then
+    Exit(FormatDateTime(ACol.DisplayFormat,DT));
+
+  // Otherwise build the format from the grid defaults per field sub-kind.
+  var Fmt: string;
+  case AField.DataType of
+    ftDate:
+      Fmt:=FDateFormat;
+    ftTime:
+      Fmt:=FTimeFormat;
+  else
+    // ftDateTime / ftTimeStamp / ftOraTimeStamp: date+time, unless the column
+    // is configured as date-only.
+    if (ACol<>nil) and (ACol.DateTimeEditor=dteDate) then
+      Fmt:=FDateFormat
+    else
+      Fmt:=Trim(FDateFormat+' '+FTimeFormat);
+  end;
+
+  // Empty format falls back to the field's own rendering.
+  if Fmt='' then Exit(AField.AsString);
+  Result:=FormatDateTime(Fmt,DT);
+end;
+
+procedure TMultiHeaderDBGrid.SetDateFormat(const Value: string);
+begin
+  if FDateFormat<>Value then begin
+    FDateFormat:=Value;
+    RefreshCells; // cached strings used the old format
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.SetTimeFormat(const Value: string);
+begin
+  if FTimeFormat<>Value then begin
+    FTimeFormat:=Value;
+    RefreshCells;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.RefreshCells;
+begin
+  FCellTexts.Clear;
+  Invalidate;
+end;
+
 function TMultiHeaderDBGrid.GetRowData(ARow: Integer): TDBRowData;
 begin
   if FCellTexts.TryGetValue(ARow,Result) then begin
@@ -6018,13 +6127,14 @@ begin
   end;
 
   var DS:=DataSet;
-  var Fields:=GetVisibleFields;
+  var Fields: TArray<TField>;
+  var Cols:=ResolveColumns(Fields); // Cols[i] pairs with Fields[i]
 
   SetLength(Result.Cells,Length(Fields));
 
   if ARow=DS.RecNo-1 then begin
     for var i:=0 to High(Fields) do begin
-      Result.Cells[i]:=Fields[i].AsString;
+      Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
     end;
   end else begin
     DS.DisableControls;
@@ -6033,7 +6143,7 @@ begin
       try
         DS.RecNo:=ARow+1;
         for var i:=0 to High(Fields) do begin
-          Result.Cells[i]:=Fields[i].AsString;
+          Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
         end;
       finally
         DS.Bookmark:=Bookmark;

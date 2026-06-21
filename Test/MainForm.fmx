@@ -183,83 +183,9 @@ object Form1: TForm1
         OnSelectCell = GridSelectCell
         DataSource = DS
         RowCacheSize = 0
-        Columns = <
-          item
-            Title = 'id'
-            FieldName = 'id'
-          end
-          item
-            Title = 'klns'
-            FieldName = 'klns'
-          end
-          item
-            Title = 'kldotpn'
-            FieldName = 'kldotpn'
-          end
-          item
-            Title = 'kldotpk'
-            FieldName = 'kldotpk'
-          end
-          item
-            Title = 'klkod'
-            FieldName = 'klkod'
-          end
-          item
-            Title = 'klnazv'
-            FieldName = 'klnazv'
-          end
-          item
-            Title = 'klname'
-            FieldName = 'klname'
-          end
-          item
-            Title = 'kltip'
-            FieldName = 'kltip'
-          end
-          item
-            Title = 'klabd'
-            FieldName = 'klabd'
-          end
-          item
-            Title = 'klsob'
-            FieldName = 'klsob'
-          end
-          item
-            Title = 'klntstp'
-            FieldName = 'klntstp'
-          end
-          item
-            Title = 'klfl05'
-            FieldName = 'klfl05'
-          end
-          item
-            Title = 'klpr05'
-            FieldName = 'klpr05'
-          end
-          item
-            Title = 'klpr06'
-            FieldName = 'klpr06'
-          end
-          item
-            Title = 'klf2f1'
-            FieldName = 'klf2f1'
-          end
-          item
-            Title = 'klf2f2'
-            FieldName = 'klf2f2'
-          end
-          item
-            Title = 'klfl04'
-            FieldName = 'klfl04'
-          end
-          item
-            Title = 'cor_tip'
-            FieldName = 'cor_tip'
-          end
-          item
-            Title = 'cor_time'
-            FieldName = 'cor_time'
-          end>
+        DateFormat = 'DD.MM.YYYY'
+        TimeFormat = 'HH:NN:SS'
+        Columns = <>
       end
       object Panel2: TPanel
         Align = Top
