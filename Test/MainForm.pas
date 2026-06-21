@@ -105,7 +105,10 @@ end;
 
 procedure TForm1.FormShow(Sender: TObject);
 begin
-  Width:=Min(Grid3.FullTableWidth+46,Trunc(Screen.Width-40));
+  var GridMax:=Max(Grid1.FullTableWidth,Max(Grid2.FullTableWidth,Grid3.FullTableWidth));
+
+  Width:=Min(GridMax+46,Trunc(Screen.Width-40));
+
   Height:=Min(800,Trunc(Screen.Height-80));
   Left:=Max(Trunc(Screen.Width-Width) div 2,5);
   Top:=Max(Trunc(Screen.Height-Height) div 2,5);
@@ -339,7 +342,6 @@ begin
 
   ApplyGrid3WidthLimits;
   Grid.AutoSize;
-  Grid.WordWrap:=True;
 end;
 
 procedure TForm1.ApplyGrid3WidthLimits;

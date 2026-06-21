@@ -375,6 +375,14 @@ type
       FRowSelect: Boolean;
       FWordWrap: Boolean;
       FHeaderWordWrap: Boolean;
+      // When word wrap is on, AutoSizeCols first sizes wrapped columns down to
+      // their widest-word width (so text wraps). With this on (the default), a
+      // follow-up pass reconciles the total against the viewport: leftover
+      // horizontal space is handed back to wrapped columns (growing them toward
+      // their natural one-line width, so they wrap less), and an overflow shrinks
+      // columns proportionally toward their word-width floor to fit. Off = the
+      // original behaviour (size to word width regardless of available space).
+      FConservativeWrap: Boolean;
       FHeaderColumns: TMHGHeaderColumns;
       FRebuildingHeaderColumns: Boolean;
       // Raised by bulk operations (header/column rebuilds) that apply word-wrap
@@ -585,6 +593,14 @@ type
     function GetColWordWrap(Index: Integer): Boolean;
     procedure SetColWordWrap(Index: Integer; const Value: Boolean);
     procedure SetWordWrap(const Value: Boolean);
+    procedure SetConservativeWrap(const Value: Boolean);
+    // ConservativeWrap helper: after AutoSizeCols has sized wrapped columns to
+    // their word width, redistribute against the viewport - give spare width
+    // back to wrapped columns (up to their natural one-line width), or shrink
+    // them proportionally toward their word floor when the total overflows.
+    procedure ReconcileWrappedColumns(const AIsWrapped: TArray<Boolean>;
+                                      const AWordFloor, ANaturalW: TArray<Single>;
+                                      AViewportW: Integer);
     procedure SetHeaderLineColor(const Value: TAlphaColor);
     procedure SetVerticalScroll(const Value: TScrollShowMode);
     procedure SetHorisontalScroll(const Value: TScrollShowMode);
@@ -595,6 +611,13 @@ type
     function GridHaveWordWrap: boolean;
   protected
     function CanObserve(const ID: Integer): Boolean; override;
+
+    // Pre-paint hook. The base does nothing; descendants (the DB grid) use it
+    // to flush a deferred, coalesced rebuild exactly once before drawing, so a
+    // burst of column-property changes triggers a single recompute instead of
+    // one per change. Call this before any operation that must observe an
+    // up-to-date layout (paint, size queries, autosize).
+    procedure EnsureLayout; virtual;
 
     procedure Paint; override;
     procedure Resize; override;
@@ -745,6 +768,12 @@ type
     // True it keeps the enlarged width.
     property KeepEditorWidenedColumn: Boolean read FKeepEditorWidenedColumn write FKeepEditorWidenedColumn default False;
     property WordWrap: Boolean read FWordWrap write SetWordWrap default False;
+    // When word wrap is on, controls whether AutoSizeCols reconciles wrapped
+    // column widths against the available viewport: grows wrapped columns back
+    // toward their one-line width when there's spare horizontal space (less
+    // wrapping), and shrinks proportionally toward word width on overflow.
+    // On by default; turn off for the original wrap-to-word-width behaviour.
+    property ConservativeWrap: Boolean read FConservativeWrap write SetConservativeWrap default True;
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
     property HeaderWordWrap: Boolean read FHeaderWordWrap write SetHeaderWordWrap default True;
@@ -913,6 +942,12 @@ type
       // being reset to the design-time Col.Width.
       FLastColLayout: string;
       FRebuildingHeader: Boolean; // guards ResetTable re-entrancy from column changes
+      // When True, a rebuild has been requested but deferred. It is coalesced
+      // and flushed once by EnsureLayout, just before the next paint (or before
+      // any synchronous query that must see an up-to-date layout). This means a
+      // burst of column-property changes costs a single ResetTable, not one per
+      // change.
+      FRebuildPending: Boolean;
       // Effective column-index -> collection item, rebuilt by ResetTable.
       // Lets DoGetCellStyle read a column's Color in O(1) per cell.
       FColMap: TArray<TMHGColumn>;
@@ -1054,6 +1089,17 @@ type
     // and the row count. Called automatically when DataSource changes,
     // the dataset is opened/closed, or the field list changes.
     procedure ResetTable;
+
+    // Requests a rebuild but defers the work: the actual ResetTable runs once,
+    // coalesced, on the next EnsureLayout (i.e. just before paint). Prefer this
+    // over ResetTable for change notifications, so N property changes in a row
+    // cost one rebuild instead of N. Use ResetTable directly only when an
+    // up-to-date layout is needed synchronously right now.
+    procedure InvalidateTable;
+
+    // Flushes a pending deferred rebuild (see InvalidateTable). Called by Paint
+    // and by synchronous layout queries; safe to call when nothing is pending.
+    procedure EnsureLayout; override;
 
     // Recalculates RowCount from DataSet.RecordCount, clears the row cache
     // and syncs the selected row with the current DataSet record.
@@ -1499,6 +1545,7 @@ begin
   FDefaultRowHeight:=20;
   FGridLines:=True;
   FHeaderWordWrap:=True;
+  FConservativeWrap:=True;
   FHeaderColumns:=TMHGHeaderColumns.Create(Self);
   FGridLineColor:=TAlphaColors.Gray;
   FHeaderLineColor:=TAlphaColors.Black;
@@ -2072,10 +2119,18 @@ begin
   Invalidate;
 end;
 
+procedure TMultiHeaderGrid.EnsureLayout;
+begin
+  // Base grids have no deferred layout; the DB grid overrides this.
+end;
+
 procedure TMultiHeaderGrid.Paint;
 var
   Canvas: TCanvas;
 begin
+  // Flush any pending deferred rebuild so we draw an up-to-date layout.
+  EnsureLayout;
+
   Canvas:=Self.Canvas;
 
   if Canvas.BeginScene then begin
@@ -2644,6 +2699,11 @@ end;
 
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
+  // If a column rebuild is pending (deferred), do it first so we auto-size the
+  // up-to-date layout rather than the stale one. No-op on grids without
+  // deferred layout.
+  EnsureLayout;
+
   // Remember the mode the user asked for, so in-house re-sizes (editor re-fit,
   // commit re-fit, visible-rows pass) reuse it - fast stays fast, precise stays
   // pixel-consistent with the editor.
@@ -3111,14 +3171,28 @@ begin
   // Optimization: if there's no WordWrap, use the fast path
   var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
 
+  // Per-column data captured for the conservative-wrap reconciliation pass
+  // (only meaningful for columns that were wrap-narrowed):
+  //   ColIsWrapped  - this column's width was reduced to let content wrap.
+  //   ColWordFloor  - the smallest width that still keeps whole words intact
+  //                   (incl. padding); never shrink a wrapped column below this.
+  //   ColNaturalW   - the width that would show the widest content on ONE line
+  //                   (incl. padding); the cap we grow a wrapped column back to.
+  var ColIsWrapped: TArray<Boolean>; SetLength(ColIsWrapped, FColCount);
+  var ColWordFloor: TArray<Single>;  SetLength(ColWordFloor, FColCount);
+  var ColNaturalW:  TArray<Single>;  SetLength(ColNaturalW,  FColCount);
+
   for i:=0 to FColCount-1 do begin
     // HeaderFullW  - widest header caption laid out on a SINGLE line.
     // HeaderWordW  - widest single word (the tightest a wrapping header can be).
     // DataW        - widest cell content (honouring cell word-wrap as before).
+    // DataFullW    - widest cell content on ONE line (ignores wrap shrink); used
+    //                as the natural-width cap when reconciling against viewport.
     // CanWrapHdr   - any header element over this column allows word wrap.
     var HeaderFullW:Single:=0;
     var HeaderWordW:Single:=0;
     var DataW:Single:=0;
+    var DataFullW:Single:=0;
     var CanWrapHdr:Boolean:=False;
 
     // Check the headers
@@ -3226,6 +3300,10 @@ begin
           for var Line in Lines do
             FullLineW:=Max(FullLineW,Canvas.TextWidth(Line));
 
+          // Natural one-line width (the cap we may grow back toward), kept
+          // separately from the possibly-collapsed DataW.
+          DataFullW:=Max(DataFullW,FullLineW/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+
           if FullLineW>DataWrapGateW then begin
             // Wide content: size to the widest single word, let it wrap.
             var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
@@ -3241,8 +3319,11 @@ begin
         end else begin
           // Without WordWrap, measure each line
           var Lines:=Text.Split([#13#10]);
-          for var Line in Lines do
-            DataW:=Max(DataW,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
+          for var Line in Lines do begin
+            var LineW:=Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth/2;
+            DataW:=Max(DataW,LineW);
+            DataFullW:=Max(DataFullW,LineW);
+          end;
         end;
       end;
     end;
@@ -3292,12 +3373,101 @@ begin
     if NewWidth<Floor then
       NewWidth:=Floor;
 
+    // --- Conservative-wrap bookkeeping -------------------------------------
+    // The word-width floor: the narrowest this column may become without
+    // splitting whole words (data words and header words both considered),
+    // used only when SHRINKING to fit.
+    var WordFloorW:=Max(DataW, Min(HeaderWordW, WordWidthCap))+CellPaddingFull;
+    ColWordFloor[i]:=Max(WordFloorW, Floor);
+    // The natural one-line width is DATA-only: a wide header is allowed to wrap
+    // and must NOT pull the column wider. We only ever grow a column back to the
+    // width its data needs on one line - never to fit the caption.
+    ColNaturalW[i]:=DataFullW+CellPaddingFull;
+    if ColNaturalW[i]<NewWidth then ColNaturalW[i]:=NewWidth;
+    // A column has reclaimable slack only when its DATA was cut: the data's
+    // one-line width exceeds the width we settled on. Header wrapping alone does
+    // not count - growing to un-wrap a caption is not wanted.
+    ColIsWrapped[i]:=(DataFullW>DataW+1) and (ColNaturalW[i]>NewWidth+1);
+
     ColWidths[i]:=NewWidth;
   end;
+
+  // --- Conservative-wrap reconciliation against the viewport ---------------
+  // Wrapped columns above were sized down to word width so text wraps. Now
+  // reconcile the total against the available viewport width: hand spare
+  // horizontal space back to wrapped columns (so they wrap less), or, on
+  // overflow, shrink them proportionally toward their word floor to fit.
+  if FConservativeWrap and GridHaveWordWrap and (FColCount>0) then
+    ReconcileWrappedColumns(ColIsWrapped, ColWordFloor, ColNaturalW, VP);
 
   // Header heights must follow the (possibly wrap-narrowed) column widths.
   AutoSizeHeaders;
   Invalidate;
+end;
+
+procedure TMultiHeaderGrid.ReconcileWrappedColumns(
+  const AIsWrapped: TArray<Boolean>;
+  const AWordFloor, ANaturalW: TArray<Single>;
+  AViewportW: Integer);
+var
+  i: Integer;
+begin
+  if AViewportW<=0 then Exit;
+
+  // Total currently allocated, and how much the wrapped columns can flex.
+  var Total:=0;
+  var GrowHeadroom:Single:=0;  // sum of (natural - current) over wrapped cols
+  var ShrinkHeadroom:Single:=0;// sum of (current - floor)   over wrapped cols
+  for i:=0 to FColCount-1 do begin
+    Total:=Total+FColData[i].Widths;
+    if AIsWrapped[i] then begin
+      var Cur:=FColData[i].Widths;
+      var Cap:=ANaturalW[i];
+      // Respect an explicit per-column MaxWidth as the real upper bound.
+      if (FColData[i].MaxWidth>0) and (Cap>FColData[i].MaxWidth) then
+        Cap:=FColData[i].MaxWidth;
+      if Cap>Cur then GrowHeadroom:=GrowHeadroom+(Cap-Cur);
+      if Cur>AWordFloor[i] then ShrinkHeadroom:=ShrinkHeadroom+(Cur-AWordFloor[i]);
+    end;
+  end;
+
+  // Leave a hair of slack so we don't trip the horizontal scrollbar by 1px.
+  var Avail:=AViewportW-2;
+
+  if (Total<Avail) and (GrowHeadroom>0) then begin
+    // Spare space: grow wrapped columns back toward their one-line width,
+    // proportional to each column's remaining headroom. Never exceed natural
+    // width (or MaxWidth), so we stop wrapping rather than over-stretch.
+    var Spare:Single:=Avail-Total;
+    if Spare>GrowHeadroom then Spare:=GrowHeadroom; // don't grow past natural
+    for i:=0 to FColCount-1 do begin
+      if not AIsWrapped[i] then Continue;
+      var Cur:=FColData[i].Widths;
+      var Cap:=ANaturalW[i];
+      if (FColData[i].MaxWidth>0) and (Cap>FColData[i].MaxWidth) then
+        Cap:=FColData[i].MaxWidth;
+      var Room:=Cap-Cur;
+      if Room<=0 then Continue;
+      var Add:=Round(Spare*(Room/GrowHeadroom));
+      if Add>Room then Add:=Round(Room);
+      if Add>0 then ColWidths[i]:=Cur+Add;
+    end;
+  end else if (Total>Avail) and (ShrinkHeadroom>0) then begin
+    // Overflow: shrink wrapped columns proportionally toward their word floor,
+    // only as much as needed to fit (never below the floor, so whole words stay
+    // intact and the rest wraps).
+    var Excess:Single:=Total-Avail;
+    if Excess>ShrinkHeadroom then Excess:=ShrinkHeadroom; // can't reclaim more
+    for i:=0 to FColCount-1 do begin
+      if not AIsWrapped[i] then Continue;
+      var Cur:=FColData[i].Widths;
+      var Room:=Cur-AWordFloor[i];
+      if Room<=0 then Continue;
+      var Cut:=Round(Excess*(Room/ShrinkHeadroom));
+      if Cut>Room then Cut:=Round(Room);
+      if Cut>0 then ColWidths[i]:=Cur-Cut;
+    end;
+  end;
 end;
 
 procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False);
@@ -5386,6 +5556,18 @@ begin
   end;
 end;
 
+procedure TMultiHeaderGrid.SetConservativeWrap(const Value: Boolean);
+begin
+  if FConservativeWrap<>Value then begin
+    FConservativeWrap:=Value;
+    // Only matters while wrapping; re-fit so the new policy takes effect.
+    if not FSuppressAutoSize and GridHaveWordWrap then begin
+      AutoSize(FAutoSizePrecise);
+    end;
+    Invalidate;
+  end;
+end;
+
 procedure TMultiHeaderGrid.Invalidate;
 begin
   InvalidateRect(LocalRect);
@@ -5450,7 +5632,11 @@ begin
   if (FColor<>Value) or (not FColorIsSet) then begin
     FColor:=Value;
     FColorIsSet:=True;
-    Changed;
+    // Colour is read live per cell from FColMap (the same column instance) by
+    // DoGetCellStyle, and it does not affect the column set, order, widths or
+    // header layout. So a full rebuild is unnecessary - just repaint.
+    var G:=Grid;
+    if G<>nil then G.Invalidate;
   end;
 end;
 
@@ -5475,9 +5661,11 @@ end;
 procedure TMHGColumns.Update(Item: TCollectionItem);
 begin
   inherited;
-  // Any add/remove/reorder/property change rebuilds the grid header.
+  // Any add/remove/reorder/property change rebuilds the grid header. Defer and
+  // coalesce: a burst of changes (e.g. setting Min/MaxWidth on several columns)
+  // then costs one rebuild, flushed before the next paint.
   if FGrid<>nil then
-    FGrid.ResetTable;
+    FGrid.InvalidateTable;
 end;
 
 function TMHGColumns.Add: TMHGColumn;
@@ -5541,7 +5729,7 @@ end;
 
 procedure TMHGDataLink.LayoutChanged;
 begin
-  if FGrid<>nil then FGrid.ResetTable;
+  if FGrid<>nil then FGrid.InvalidateTable;
 end;
 
 procedure TMHGDataLink.DataSetChanged;
@@ -5963,6 +6151,24 @@ begin
   finally
     FRebuildingHeader:=False;
   end;
+
+  // A real rebuild just happened, so any deferred request is now satisfied.
+  FRebuildPending:=False;
+end;
+
+procedure TMultiHeaderDBGrid.InvalidateTable;
+begin
+  // Mark the layout dirty and schedule a repaint. The actual rebuild is
+  // deferred to EnsureLayout (called from Paint), which coalesces a burst of
+  // change notifications into a single ResetTable.
+  FRebuildPending:=True;
+  Invalidate;
+end;
+
+procedure TMultiHeaderDBGrid.EnsureLayout;
+begin
+  if FRebuildPending and (not FRebuildingHeader) then
+    ResetTable; // clears FRebuildPending
 end;
 
 procedure TMultiHeaderDBGrid.BuildGroupedHeader(const AFields: TArray<TField>;
