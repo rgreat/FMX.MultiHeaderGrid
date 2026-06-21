@@ -5,7 +5,7 @@ interface
 uses
   System.Classes, System.Types, System.UITypes, System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
-  FMX.Memo, FMX.ListBox, FMX.DateTimeCtrls, FMX.Edit, FMX.EditBox,
+  FMX.Memo, FMX.ListBox, FMX.DateTimeCtrls, FMX.DateTimeCtrls.Types, FMX.Edit, FMX.EditBox,
   FMX.NumberBox, FMX.Text, Data.DB;
 
 type
@@ -478,7 +478,7 @@ type
     procedure CancelEditing; virtual;
     procedure EditorKeyDown(Sender: TObject; var Key: Word; var KeyChar: Char;
                             Shift: TShiftState);
-    procedure EditorExit(Sender: TObject);
+    procedure EditorExit(Sender: TObject); virtual;
     // Hides a control's painted border/background so the editor blends into the
     // cell.
     procedure ApplyStyle(Sender: TObject);
@@ -987,6 +987,7 @@ type
     procedure LayoutMemoEditor(AWidth, AHeight: Single);
     procedure HideEditor; override;
     procedure CancelEditing; override;
+    procedure EditorExit(Sender: TObject); override;
     procedure LoadEditorValue(ACol, ARow: Integer; InitialChar: Char); override;
     function  GetEditorText: string; override;
     function  CommitEditorValue(ACol, ARow: Integer): Boolean; override;
@@ -1013,6 +1014,30 @@ type
     // valid number, so the TEdit only ever holds a numeric string (or '').
     procedure NumberEditorKeyDown(Sender: TObject; var Key: Word;
       var KeyChar: Char; Shift: TShiftState);
+    // OnKeyDown for the ftDateTime composite date/time controls. Lets the caret
+    // cross from the date editor's last position to the time editor's first
+    // (right arrow) and back (left arrow), while still routing Enter/Tab/Esc
+    // through the shared EditorKeyDown.
+    procedure DateTimeEditorKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: Char; Shift: TShiftState);
+    // True when C is one of the two controls of the active ftDateTime composite.
+    function  IsCompositeEditor(C: TObject): Boolean;
+    // True when the date/time control's focused format part is the last/first
+    // section (e.g. the year of dd.MM.yyyy), used to decide arrow-key hand-off.
+    function  DateTimePartIsLast(Ed: TCustomDateTimeEdit): Boolean;
+    function  DateTimePartIsFirst(Ed: TCustomDateTimeEdit): Boolean;
+    // Moves the focused format part of a date/time control to its first or last
+    // section without changing which control has focus. Used both for arrow
+    // hand-off and to re-init the editors when an edit starts on a new cell.
+    procedure DateTimeGoToFirstPart(Ed: TCustomDateTimeEdit);
+    procedure DateTimeGoToLastPart(Ed: TCustomDateTimeEdit);
+    // Resets caret/selection/format-part of every typed editor to a known state
+    // so a fresh edit never inherits the previous cell's cursor position. Called
+    // from PlaceEditorCaretAtEnd at the start of each edit.
+    procedure ResetTypedEditorCursors;
+    // Moves focus to the composite's other control, placing the caret at its
+    // start (ToTime=True) or end (ToTime=False).
+    procedure FocusCompositePart(ToTime: Boolean);
     // OnChangeTracking for the number editor: widens the column as the value
     // grows (numbers don't wrap), so the editor never clips while typing.
     procedure NumberEditorChangeTracking(Sender: TObject);
@@ -4572,8 +4597,15 @@ end;
 procedure TMultiHeaderGrid.PlaceEditorCaretAtEnd(Ed: TControl);
 begin
   // Only the base TMemo here; the DB grid overrides for its typed editors.
-  if Ed is TMemo then
-    TMemo(Ed).GoToTextEnd;
+  // Clear any inherited selection and put the caret at the end, keeping SelStart
+  // consistent with the caret so a fresh edit never starts with stale selection
+  // or a mismatched SelStart.
+  if Ed is TMemo then begin
+    var M:=TMemo(Ed);
+    M.GoToTextEnd;
+    M.SelLength:=0;
+    M.SelStart:=M.Text.Length; // align SelStart with the caret position
+  end;
 end;
 
 procedure TMultiHeaderGrid.FinishEditColWidth(ATargetW: Integer);
@@ -6387,12 +6419,14 @@ begin
     FDateEditor:=TDateEdit.Create(Self);
     FDateEditor.Format:='dd.MM.yyyy';
     WireEditor(FDateEditor);
+    FDateEditor.OnKeyDown:=DateTimeEditorKeyDown;
     FDateEditor.StyleLookup:='mhg_editor_date';
   end;
   if FTimeEditor=nil then begin
     FTimeEditor:=TTimeEdit.Create(Self);
     FTimeEditor.Format:='HH:nn:ss';
     WireEditor(FTimeEditor);
+    FTimeEditor.OnKeyDown:=DateTimeEditorKeyDown;
     FTimeEditor.StyleLookup:='mhg_editor_time';
   end;
 
@@ -6427,6 +6461,188 @@ begin
 
   // Let the shared handler process Enter/Tab/Esc and anything we allowed.
   EditorKeyDown(Sender, Key, KeyChar, Shift);
+end;
+
+function TMultiHeaderDBGrid.IsCompositeEditor(C: TObject): Boolean;
+begin
+  Result:=(FEditField<>nil) and (EditorKindForField(FEditField)=ekDateTime)
+          and ((C=FDateEditor) or (C=FTimeEditor));
+end;
+
+type
+  // Surfaces the protected format-part navigation of TCustomDateTimeEdit so the
+  // composite editor can tell when the caret is on the first/last section
+  // (e.g. the year of dd.MM.yyyy) and hand off to the sibling control.
+  TDateTimeEditAccess = class(TCustomDateTimeEdit);
+
+procedure TMultiHeaderDBGrid.DateTimeGoToFirstPart(Ed: TCustomDateTimeEdit);
+// Walk left until GoToPreviousFormatPart stops changing the focused part.
+var
+  Before, After: TDTFormatPart;
+begin
+  if Ed=nil then Exit;
+  var Cracker:=TDateTimeEditAccess(Ed);
+  while Cracker.FindCurrentFormatPart(Before) do begin
+    Cracker.GoToPreviousFormatPart;
+    if not Cracker.FindCurrentFormatPart(After) then Break;
+    if CompareMem(@Before, @After, SizeOf(TDTFormatPart)) then Break;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.DateTimeGoToLastPart(Ed: TCustomDateTimeEdit);
+// Walk right until GoToNextFormatPart stops changing the focused part.
+var
+  Before, After: TDTFormatPart;
+begin
+  if Ed=nil then Exit;
+  var Cracker:=TDateTimeEditAccess(Ed);
+  while Cracker.FindCurrentFormatPart(Before) do begin
+    Cracker.GoToNextFormatPart;
+    if not Cracker.FindCurrentFormatPart(After) then Break;
+    if CompareMem(@Before, @After, SizeOf(TDTFormatPart)) then Break;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.FocusCompositePart(ToTime: Boolean);
+// Moves focus between the two halves of the ftDateTime composite. ToTime=True
+// jumps to the time control and selects its first format part; ToTime=False
+// jumps to the date control and selects its last part. FActiveEditor is updated
+// so commit/layout keep treating the focused half as active.
+begin
+  if ToTime then begin
+    if (FTimeEditor=nil) or not FTimeEditor.CanFocus then Exit;
+    FActiveEditor:=FTimeEditor;
+    FTimeEditor.SetFocus;
+    DateTimeGoToFirstPart(FTimeEditor);  // first section of the time control
+  end
+  else begin
+    if (FDateEditor=nil) or not FDateEditor.CanFocus then Exit;
+    FActiveEditor:=FDateEditor;
+    FDateEditor.SetFocus;
+    DateTimeGoToLastPart(FDateEditor);   // last section of the date control
+  end;
+end;
+
+function TMultiHeaderDBGrid.DateTimePartIsLast(
+  Ed: TCustomDateTimeEdit): Boolean;
+// True when the focused format part is the rightmost one (no next part to move
+// to). Detected by probing: remember the current part, step forward, and see
+// whether the current part actually changed; if not, we were already at the
+// end. Any forward step is undone so probing never alters the visible caret.
+var
+  Before, After: TDTFormatPart;
+  HadBefore: Boolean;
+begin
+  Result:=False;
+  if Ed=nil then Exit;
+  var Cracker:=TDateTimeEditAccess(Ed);
+  HadBefore:=Cracker.FindCurrentFormatPart(Before);
+  if not HadBefore then Exit;        // nothing focused -> treat as "not last"
+  Cracker.GoToNextFormatPart;
+  if Cracker.FindCurrentFormatPart(After) then begin
+    // CompareMem keeps this independent of TDTFormatPart's exact fields, which
+    // differ across FMX versions.
+    Result:=CompareMem(@Before, @After, SizeOf(TDTFormatPart));
+    if not Result then
+      Cracker.GoToPreviousFormatPart; // undo the probe step
+  end
+  else
+    Result:=True;                     // no part after the move -> was last
+end;
+
+function TMultiHeaderDBGrid.DateTimePartIsFirst(
+  Ed: TCustomDateTimeEdit): Boolean;
+// Mirror of DateTimePartIsLast for the leftmost format part.
+var
+  Before, After: TDTFormatPart;
+  HadBefore: Boolean;
+begin
+  Result:=False;
+  if Ed=nil then Exit;
+  var Cracker:=TDateTimeEditAccess(Ed);
+  HadBefore:=Cracker.FindCurrentFormatPart(Before);
+  if not HadBefore then Exit;
+  Cracker.GoToPreviousFormatPart;
+  if Cracker.FindCurrentFormatPart(After) then begin
+    Result:=CompareMem(@Before, @After, SizeOf(TDTFormatPart));
+    if not Result then
+      Cracker.GoToNextFormatPart;     // undo the probe step
+  end
+  else
+    Result:=True;
+end;
+
+procedure TMultiHeaderDBGrid.DateTimeEditorKeyDown(Sender: TObject;
+  var Key: Word; var KeyChar: Char; Shift: TShiftState);
+// Section-crossing between the date and time halves of an ftDateTime cell.
+// These controls navigate by format part (day/month/year, hour/min/sec), not a
+// character caret, so "edge" means the focused part is the first/last section.
+//   - Right arrow on the date control's last part  -> first part of time control.
+//   - Left  arrow on the time control's first part -> last part of date control.
+// Tab/Shift+Tab also hop between the two halves before leaving the cell.
+// Everything else (Enter/Esc/normal editing) defers to the shared handler.
+begin
+  if IsCompositeEditor(Sender) then begin
+    case Key of
+      vkRight:
+        if (Sender=FDateEditor) and DateTimePartIsLast(FDateEditor) then begin
+          FocusCompositePart(True);   // cross into the time control
+          Key:=0; KeyChar:=#0;
+          Exit;
+        end;
+
+      vkLeft:
+        if (Sender=FTimeEditor) and DateTimePartIsFirst(FTimeEditor) then begin
+          FocusCompositePart(False);  // cross back into the date control
+          Key:=0; KeyChar:=#0;
+          Exit;
+        end;
+
+      vkTab:
+        begin
+          // Tab moves date -> time; Shift+Tab moves time -> date. Only when the
+          // hop stays inside the cell; otherwise fall through to the shared
+          // handler, which moves to the next/previous grid cell.
+          if (ssShift in Shift) and (Sender=FTimeEditor) then begin
+            FocusCompositePart(False);
+            Key:=0; KeyChar:=#0;
+            Exit;
+          end
+          else if not (ssShift in Shift) and (Sender=FDateEditor) then begin
+            FocusCompositePart(True);
+            Key:=0; KeyChar:=#0;
+            Exit;
+          end;
+        end;
+    end;
+  end;
+
+  // Enter/Esc/Tab-out and anything not handled above.
+  EditorKeyDown(Sender, Key, KeyChar, Shift);
+end;
+
+procedure TMultiHeaderDBGrid.EditorExit(Sender: TObject);
+// For the ftDateTime composite the date and time controls form one logical
+// editor, so focus moving from one to the other must NOT commit/close the cell.
+// Only commit when focus has actually left both halves. All other editors keep
+// the base behaviour (any focus loss commits).
+begin
+  if FEditing and IsCompositeEditor(Sender) then begin
+    // Defer the decision: after this OnExit, focus may land on the sibling
+    // control (intra-cell hop) or somewhere outside (real exit). Check on the
+    // next message cycle which of the two halves, if either, now holds focus.
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        if not FEditing then Exit;
+        if (FDateEditor<>nil) and FDateEditor.IsFocused then Exit;
+        if (FTimeEditor<>nil) and FTimeEditor.IsFocused then Exit;
+        CommitEditing; // focus left the whole composite
+      end);
+    Exit;
+  end;
+
+  inherited; // non-composite editors: base commits on focus loss
 end;
 
 procedure TMultiHeaderDBGrid.NumberEditorChangeTracking(Sender: TObject);
@@ -6632,18 +6848,59 @@ begin
   end;
 end;
 
+procedure TMultiHeaderDBGrid.ResetTypedEditorCursors;
+// Re-init caret / selection / format-part of every typed editor to a known
+// state so a fresh edit on a new cell never inherits the previous cell's cursor
+// position or selection. The shared memo and the number/edit controls have
+// their selection cleared and SelStart aligned to the caret (end of text, just
+// loaded); the combo box has no caret; the date/time controls reset to their
+// first format part. Both composite halves are reset, not just the active one.
+begin
+  // Shared TMemo (base field, reused for ekMemo cells).
+  if FEditor<>nil then begin
+    FEditor.GoToTextEnd;
+    FEditor.SelLength:=0;
+    FEditor.SelStart:=FEditor.Text.Length;
+  end;
+
+  // Plain TEdit for numeric cells.
+  if FNumberEditor<>nil then begin
+    FNumberEditor.GoToTextEnd;
+    FNumberEditor.SelLength:=0;
+    FNumberEditor.SelStart:=FNumberEditor.Text.Length;   // SelStart = caret
+    FNumberEditor.CaretPosition:=FNumberEditor.Text.Length;
+  end;
+
+  // Combo box: no text caret/selection to reset (its value is ItemIndex), so
+  // it is intentionally left untouched here.
+
+  // The date control starts on its first section (day); the time control on its
+  // first too, so a later hand-off into it begins cleanly at the hour.
+  DateTimeGoToFirstPart(FDateEditor);
+  DateTimeGoToFirstPart(FTimeEditor);
+end;
+
 procedure TMultiHeaderDBGrid.PlaceEditorCaretAtEnd(Ed: TControl);
 begin
-  // Typed text editors (number / date / time) descend from TCustomEdit and
-  // expose GoToTextEnd; the combo box has no caret. Fall back to the base for
-  // the shared TMemo.
+  // Always re-init every typed editor first, so a new edit on a different cell
+  // starts from a known cursor state regardless of which control is active.
+  ResetTypedEditorCursors;
+
+  // Picker date/time controls don't expose a usable character caret; their
+  // position is set by ResetTypedEditorCursors (format-part) above, so nothing
+  // more to do here for them.
+  if (Ed=FDateEditor) or (Ed=FTimeEditor) then Exit;
+
+  // The number editor (a plain TEdit) and any other TCustomEdit: caret to end,
+  // selection cleared, SelStart aligned to the caret. The combo box has no
+  // caret; fall back to the base for the shared TMemo (which also clears
+  // selection and aligns SelStart).
   if Ed is TCustomEdit then begin
     var E:=TCustomEdit(Ed);
     E.GoToTextEnd;
-    // GoToTextEnd can be a no-op right after SetFocus on some platforms, so set
-    // the caret index explicitly and clear any selection.
     E.SelLength:=0;
     E.CaretPosition:=E.Text.Length;
+    E.SelStart:=E.Text.Length; // keep SelStart consistent with the caret
   end else
     inherited;
 end;

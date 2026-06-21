@@ -6,8 +6,10 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.Variants,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.MultiHeaderGrid,
   FMX.Controls.Presentation,
-  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient, System.ImageList, FMX.ImgList,
-  FMX.EditBox, FMX.NumberBox, FMX.Memo.Types, FMX.ScrollBox, FMX.Memo, FMX.DateTimeCtrls;
+{$IFDEF MSWINDOWS}
+  MidasLib,
+{$ENDIF}
+  FMX.StdCtrls, FMX.Objects, FMX.Edit, FMX.TabControl, Data.DB, Datasnap.DBClient;
 
 type
   TForm1 = class(TForm)
@@ -38,7 +40,6 @@ type
     LimitWidthsCheckBox: TCheckBox;
     LineWidthEdit: TEdit;
     Label2: TLabel;
-    StyleBook1: TStyleBook;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
