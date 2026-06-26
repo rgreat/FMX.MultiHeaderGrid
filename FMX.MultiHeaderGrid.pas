@@ -6431,7 +6431,7 @@ begin
   // Auto-create columns only when there are none AND this is a source/table we
   // have not auto-created for yet. This fills a fresh grid or a newly opened
   // table, but never resurrects columns the user deleted on the same table.
-  if (FColumns.Count=0) and (Sig<>FLastAutoSig) then begin
+  if Sig<>FLastAutoSig then begin
     FLastAutoSig:=Sig;
     AutoCreateColumns; // rebuilds via the collection's Update -> ResetTable
     // If the table genuinely had no visible fields, AutoCreateColumns adds
