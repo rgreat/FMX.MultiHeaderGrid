@@ -371,6 +371,7 @@ type
       FOnRowResized: TRowResizedEvent;
       FOnGridScroll: TGridScrollEvent;
       FLastClickIsOnCell: boolean;
+      FDrawRect : TRectF;
 
       FRowSelect: Boolean;
       FWordWrap: Boolean;
@@ -421,6 +422,7 @@ type
       FKeepEditorWidenedColumn: Boolean;
       FReadOnly: Boolean;
       FPainted: boolean;
+      FMaxColumnAutoWidth: integer;
 
     function ResizeStartWidth: Integer;
     procedure SetHeaderWordWrap(const Value: Boolean);
@@ -777,6 +779,9 @@ type
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
     property HeaderWordWrap: Boolean read FHeaderWordWrap write SetHeaderWordWrap default True;
+    // Maximum width of the column for autowidth computing
+    // Can be overriden by MaxWidth property of  the column.
+    property MaxColumnAutoWidth: integer read FMaxColumnAutoWidth write FMaxColumnAutoWidth default 400;
     // Declarative header/column definitions for the non-data-bound grids.
     // When populated they build the (grouped) header and set column
     // widths/alignment/word wrap. When empty the grid keeps whatever
@@ -1582,6 +1587,7 @@ begin
   FHeaderLineColor:=TAlphaColors.Black;
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
+  FMaxColumnAutoWidth:=400;
 
   Margins.Rect:=RectF(4,4,4,4);
 
@@ -1641,7 +1647,7 @@ begin
     FColData[i].TextHAlignment:=TTextAlign.Leading;
     FColData[i].WordWrap:=False;
     FColData[i].MinWidth:=0;
-    FColData[i].MaxWidth:=MaxInt;
+    FColData[i].MaxWidth:=0;
   end;
 
   var Top:=0;
@@ -1722,7 +1728,7 @@ begin
       FColData[i].TextVAlignment:=TTextAlign.Center;
       FColData[i].TextHAlignment:=TTextAlign.Leading;
       FColData[i].MinWidth:=0;
-      FColData[i].MaxWidth:=MaxInt;
+      FColData[i].MaxWidth:=0;
       FColData[i].WordWrap:=False;
     end;
 
@@ -1854,7 +1860,7 @@ begin
   if (Index>=0) and (Index<Length(FColData)) then
     Result:=FColData[Index].MaxWidth
   else
-    Result:=MaxInt;
+    Result:=0;
 end;
 
 function TMultiHeaderGrid.GetColMinWidth(Index: Integer): integer;
@@ -1893,7 +1899,13 @@ end;
 procedure TMultiHeaderGrid.SetColWidth(Index: Integer; const Value: Integer);
 begin
   if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].Widths<>Value) then begin
-    FColData[Index].Widths:=Max(Min(Value,FColData[Index].MaxWidth),FColData[Index].MinWidth);
+    FColData[Index].Widths:=Value;
+    if FColData[Index].MaxWidth>0 then begin
+      FColData[Index].Widths:=Min(FColData[Index].Widths,FColData[Index].MaxWidth);
+    end;
+    if FColData[Index].MinWidth>0 then begin
+      FColData[Index].Widths:=Max(FColData[Index].Widths,FColData[Index].MinWidth);
+    end;
     UpdateSize;
     Invalidate;
   end;
@@ -2168,11 +2180,11 @@ begin
     var Save:=Canvas.SaveState;
     try
       // Set the clipping region
-      var R:=TRectF.Create(LocalRect.Left,LocalRect.Top,
-                           LocalRect.Left+LocalRect.Width,LocalRect.Top+LocalRect.Height);
-      if VScrollBar.Visible then R.Right:=R.Right-VScrollBar.Width;
-      if HScrollPanel.Visible then R.Bottom:=R.Bottom-HScrollPanel.Height;
-      Canvas.IntersectClipRect(R);
+      FDrawRect:=TRectF.Create(LocalRect.Left,LocalRect.Top,
+                              LocalRect.Left+LocalRect.Width,LocalRect.Top+LocalRect.Height);
+      if VScrollBar.Visible then FDrawRect.Right:=FDrawRect.Right-VScrollBar.Width;
+      if HScrollPanel.Visible then FDrawRect.Bottom:=FDrawRect.Bottom-HScrollPanel.Height;
+      Canvas.IntersectClipRect(FDrawRect);
 
       Canvas.Fill.Kind:=TBrushKind.Solid;
       Canvas.Fill.Color:=FBackgroundColor;
@@ -2268,6 +2280,8 @@ begin
   else
     ARect:=GetHeaderRect(ALevel, ACol);
 
+  if not FDrawRect.IntersectsWith(ARect) then Exit;
+
   // Background fill
   if Element.Style.CellColorIsSet then begin
     // Explicitly set for the cell
@@ -2347,12 +2361,16 @@ begin
           for var K:=0 to MergedCell.RowSpan-1 do
             Rect.Bottom:=Rect.Bottom+GetRowHeight(j+K);
 
+          if not FDrawRect.IntersectsWith(Rect) then Continue;
+
           DrawCell(Canvas, MergedCell.Col, MergedCell.Row, Rect);
         end;
         Continue;
       end;
 
       Rect:=GetCellRect(i, j);
+      if not FDrawRect.IntersectsWith(Rect) then Continue;
+
       DrawCell(Canvas, i, j, Rect);
     end;
   end;
@@ -2544,27 +2562,29 @@ begin
   X:=StartX;
   for i:=0 to FColCount do begin
     // Inner vertical lines
-    for j:=TopRow to FRowCount-1 do begin
-      Y:=StartY+FRowData[j].Top;
-      if FRowData[j].Top>ViewBottomCell then Break;
+    if (X>=FDrawRect.Left) and (X<=FDrawRect.Right) then begin
+      for j:=TopRow to FRowCount-1 do begin
+        Y:=StartY+FRowData[j].Top;
+        if FRowData[j].Top>ViewBottomCell then Break;
 
-      // Check whether the line falls inside a merged cell
-      var ShouldDraw:=True;
+        // Check whether the line falls inside a merged cell
+        var ShouldDraw:=True;
 
-      // Check the cell to the left
-      if IsMergedCell(i-1, j, MergedCell) then begin
-        if i<MergedCell.Col+MergedCell.ColSpan then
-          ShouldDraw:=False;
-      end;
+        // Check the cell to the left
+        if IsMergedCell(i-1, j, MergedCell) then begin
+          if i<MergedCell.Col+MergedCell.ColSpan then
+            ShouldDraw:=False;
+        end;
 
-      // Check the cell to the right
-      if ShouldDraw and IsMergedCell(i, j, MergedCell) then begin
-        if i>MergedCell.Col then
-          ShouldDraw:=False;
-      end;
+        // Check the cell to the right
+        if ShouldDraw and IsMergedCell(i, j, MergedCell) then begin
+          if i>MergedCell.Col then
+            ShouldDraw:=False;
+        end;
 
-      if ShouldDraw then begin
-        Canvas.DrawLine(PointF(X, Y), PointF(X, Y+GetRowHeight(j)), 1);
+        if ShouldDraw then begin
+          Canvas.DrawLine(PointF(X, Y), PointF(X, Y+GetRowHeight(j)), 1);
+        end;
       end;
     end;
 
@@ -2730,11 +2750,6 @@ end;
 
 procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
 begin
-  // If a column rebuild is pending (deferred), do it first so we auto-size the
-  // up-to-date layout rather than the stale one. No-op on grids without
-  // deferred layout.
-  EnsureLayout;
-
   // Remember the mode the user asked for, so in-house re-sizes (editor re-fit,
   // commit re-fit, visible-rows pass) reuse it - fast stays fast, precise stays
   // pixel-consistent with the editor.
@@ -3188,6 +3203,11 @@ var
   i,j:Integer;
   Text:string;
 begin
+  // If a column rebuild is pending (deferred), do it first so we auto-size the
+  // up-to-date layout rather than the stale one. No-op on grids without
+  // deferred layout.
+  EnsureLayout;
+
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
   var CellDelimterWidth:=FGridLineWidth/2;
   var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth+1;
@@ -3420,6 +3440,9 @@ begin
     // not count - growing to un-wrap a caption is not wanted.
     ColIsWrapped[i]:=(DataFullW>DataW+1) and (ColNaturalW[i]>NewWidth+1);
 
+    // Limit width
+    NewWidth:=Min(NewWidth,Max(FMaxColumnAutoWidth,FColData[i].MaxWidth));
+
     ColWidths[i]:=NewWidth;
   end;
 
@@ -3456,7 +3479,7 @@ begin
       var Cap:=ANaturalW[i];
       // Respect an explicit per-column MaxWidth as the real upper bound.
       if (FColData[i].MaxWidth>0) and (Cap>FColData[i].MaxWidth) then
-        Cap:=FColData[i].MaxWidth;
+        Cap:=Max(FMaxColumnAutoWidth,FColData[i].MaxWidth);
       if Cap>Cur then GrowHeadroom:=GrowHeadroom+(Cap-Cur);
       if Cur>AWordFloor[i] then ShrinkHeadroom:=ShrinkHeadroom+(Cur-AWordFloor[i]);
     end;
@@ -3474,9 +3497,7 @@ begin
     for i:=0 to FColCount-1 do begin
       if not AIsWrapped[i] then Continue;
       var Cur:=FColData[i].Widths;
-      var Cap:=ANaturalW[i];
-      if (FColData[i].MaxWidth>0) and (Cap>FColData[i].MaxWidth) then
-        Cap:=FColData[i].MaxWidth;
+      var Cap:=Min(ANaturalW[i],Max(FMaxColumnAutoWidth,FColData[i].MaxWidth));
       var Room:=Cap-Cur;
       if Room<=0 then Continue;
       var Add:=Round(Spare*(Room/GrowHeadroom));
@@ -3511,6 +3532,11 @@ type
 
 procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False);
 begin
+  // If a column rebuild is pending (deferred), do it first so we auto-size the
+  // up-to-date layout rather than the stale one. No-op on grids without
+  // deferred layout.
+  EnsureLayout;
+
   Canvas.Font.Assign(FCellFont);
 
   var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
@@ -5304,7 +5330,7 @@ begin
   var SumMax:=0;
   for i:=0 to GroupColCount-1 do begin
     var Lo:=Max(10, FColData[StartCol+i].MinWidth);
-    var Hi:=FColData[StartCol+i].MaxWidth;
+    var Hi:=IfThen(FColData[StartCol+i].MaxWidth>0,FColData[StartCol+i].MaxWidth,MaxInt);
     if Hi<Lo then Hi:=Lo;
     MinW[i]:=Lo;
     MaxW[i]:=Hi;
@@ -6232,7 +6258,6 @@ begin
           // When a column drops its limits (Min/Max back to 0), restore the
           // permissive defaults so a previously clamped width can grow again.
           if Col.MinWidth<=0 then ColMinWidth[i]:=0;
-          if Col.MaxWidth<=0 then ColMaxWidth[i]:=MaxInt;
           ColWordWrap[i]:=Col.WordWrap;
           ColTextHAlignment[i]:=Col.Alignment;
           ColTextVAlignment[i]:=Col.VertAlignment;
@@ -7435,6 +7460,8 @@ begin
   var Button:=TButton(Control.FindStyleResource('mhgclearbutton'));
   if Assigned(Button) then begin
     Result:=Button.Width+Button.Margins.Left+Button.Margins.Right;
+  end else begin
+    Result:=0;
   end;
 end;
 
