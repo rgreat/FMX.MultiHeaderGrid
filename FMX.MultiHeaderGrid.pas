@@ -674,9 +674,9 @@ type
     procedure ClearMergedCells;
 
     procedure AutoSizeCols(ForcePrecise: boolean = False);
-    procedure AutoSizeRows(ForcePrecise: boolean = False); overload;
-    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False); overload;
-    procedure AutoSizeVisibleRows;
+    procedure AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1); overload;
+    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1); overload;
+    procedure AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
     // Sizes each header level's height to fit its (optionally wrapped or
     // multi-line) captions. Shared by all grid descendants.
     procedure AutoSizeHeaders;
@@ -3743,15 +3743,15 @@ begin
     AutoSizeHeaders;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False);
+procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
 begin
-  AutoSizeRows(0, FRowCount-1, ForcePrecise);
+  AutoSizeRows(0, FRowCount-1, ForcePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
 end;
 
 type
   TSizeComputeMode = (cmFast,cmSlow,cmFull);
 
-procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False);
+procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
 begin
   // If a column rebuild is pending (deferred), do it first so we auto-size the
   // up-to-date layout rather than the stale one. No-op on grids without
@@ -3775,6 +3775,13 @@ begin
     ComputeMode:=TSizeComputeMode.cmFull;
   end;
 
+  if FResizeStartColumnIndex<0 then begin
+    FResizeStartColumnIndex:=0;
+  end;
+  if FResizeEndColumnIndex<0 then begin
+    FResizeEndColumnIndex:=FColCount-1;
+  end;
+
   Canvas.Font.Assign(FCellFont);
   var TH:=Canvas.TextHeight('A');
   for var Row:=FromRow to FRowCount-1 do begin
@@ -3782,7 +3789,8 @@ begin
        ((ToRow>=0) and (Row>ToRow)) then Break;
 
     var MaxHeight:=TH;
-    for var Col:=0 to FColCount-1 do begin
+
+    for var Col:=FResizeStartColumnIndex to FResizeEndColumnIndex do begin
 
       var RowSpan:=1;
       var MergedCell: TMergedCell;
@@ -3856,7 +3864,7 @@ begin
 //  Invalidate;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeVisibleRows;
+procedure TMultiHeaderGrid.AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
 // Re-fits only the rows currently on screen (first..last visible row). Used for
 // live feedback during a column drag, where re-measuring every row below the
 // viewport on each MouseMove would be needlessly expensive.
@@ -3865,7 +3873,7 @@ begin
   if First<0 then First:=0;
   var Last:=RowAtHeightCoord(ViewBottom);
   if Last<First then Last:=FRowCount-1; // viewport past the last row
-  AutoSizeRows(First, Last, FAutoSizePrecise);
+  AutoSizeRows(First, Last, FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
 
   UpdateSize;
 end;
@@ -4015,7 +4023,7 @@ begin
             // heights. Re-fit only the on-screen rows for live feedback; the full
             // pass runs once on MouseUp (drag end).
             if GridHaveWordWrap then begin
-              AutoSizeVisibleRows;
+              AutoSizeVisibleRows(FResizeStartColumnIndex,FResizeEndColumnIndex);
             end;
           end;
         end;
@@ -4061,8 +4069,6 @@ begin
     if FResizeMode<>TResizeMode.rmNone then begin
       var WasColumnResize:=(FResizeMode=TResizeMode.rmColumn);
       DoColumnResized;
-      FResizeStartColumnIndex:=-1;
-      FResizeEndColumnIndex:=-1;
       FResizeRowIndex:=-1;
       FResizeMode:=TResizeMode.rmNone;
       Cursor:=crDefault;
@@ -4071,9 +4077,12 @@ begin
       // row so off-screen rows (skipped during the live drag) match the new
       // wrap. No-op when the grid doesn't word-wrap.
       if WasColumnResize and GridHaveWordWrap then begin
-        AutoSizeRows(FAutoSizePrecise);
+        AutoSizeRows(FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
         UpdateSize;
       end;
+
+      FResizeStartColumnIndex:=-1;
+      FResizeEndColumnIndex:=-1;
     end;
   end;
 end;
