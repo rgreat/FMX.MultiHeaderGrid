@@ -603,6 +603,17 @@ type
     procedure ReconcileWrappedColumns(const AIsWrapped: TArray<Boolean>;
                                       const AWordFloor, ANaturalW: TArray<Single>;
                                       AViewportW: Integer);
+    // After the header heights are known, find columns whose caption wrapped onto
+    // substantially more lines than the typical column (average line count rounded
+    // up) and widen them just enough to bring them down toward typical height -
+    // not all the way to one line (which would leave blank header lines). Capped
+    // by the column's MaxWidth / MaxColumnAutoWidth; if the total exceeds the
+    // viewport the grid scrolls horizontally. Active whenever HeaderWordWrap is
+    // on. Re-fits header heights itself. Returns True if any width changed.
+    function BalanceHeaderColumnWidths: Boolean;
+    // Number of wrapped lines the caption of the element governing (ALevel,ACol)
+    // needs at the column's current merged width (1 when not wrapping).
+    function HeaderElementLineCount(ALevel, ACol: Integer): Integer;
     procedure SetHeaderLineColor(const Value: TAlphaColor);
     procedure SetVerticalScroll(const Value: TScrollShowMode);
     procedure SetHorisontalScroll(const Value: TScrollShowMode);
@@ -2528,6 +2539,23 @@ begin
 
     ARect.Bottom:=ARect.Bottom-CellPadding.Bottom-FGridLineWidth/4;
 
+    // When vertically centered, fall back to top (Leading) alignment if the
+    // text is taller than the available cell height - otherwise centering
+    // clips the text symmetrically and hides its first lines. The measuring
+    // font is the one already assigned above, so it matches what is drawn.
+    if VAlignment=TTextAlign.Center then begin
+      var TextH: Single;
+      if WordWrapEnabled then begin
+        var MeasureRect:=ARect;
+        MeasureRect.Bottom:=MeasureRect.Top+100000;
+        Canvas.MeasureText(MeasureRect, Text, True, [], TTextAlign.Leading, TTextAlign.Leading);
+        TextH:=MeasureRect.Height;
+      end else
+        TextH:=Canvas.TextHeight(Text);
+      if TextH>ARect.Height then
+        VAlignment:=TTextAlign.Leading;
+    end;
+
     // Changed: added the WordWrapEnabled parameter
     Canvas.FillText(ARect, Text, WordWrapEnabled, 1, [], HAlignment, VAlignment);
   end;
@@ -3456,6 +3484,14 @@ begin
 
   // Header heights must follow the (possibly wrap-narrowed) column widths.
   AutoSizeHeaders;
+
+  // Balance an over-wrapped header band: when the header word-wraps, every
+  // column whose caption wrapped onto more lines than typical is widened in a
+  // single pass straight to its one-line width, so the over-tall header band
+  // shrinks back toward balance. The pass re-fits header heights itself.
+  if FHeaderWordWrap and (FHeaderLevels.Count>0) and (FColCount>0) then
+    BalanceHeaderColumnWidths;
+
   Invalidate;
 end;
 
@@ -3520,6 +3556,191 @@ begin
       if Cut>0 then ColWidths[i]:=Cur-Cut;
     end;
   end;
+end;
+
+function TMultiHeaderGrid.HeaderElementLineCount(ALevel, ACol: Integer): Integer;
+// How many wrapped text lines the caption at (ALevel,ACol) needs at the column's
+// current merged width. Mirrors AutoSizeHeaders' wrapped-branch measurement so
+// the balancing pass reasons about the same line counts the heights came from.
+begin
+  Result:=0;
+  var Element:=FHeaderLevels.GetElementAtCell(ACol,ALevel);
+  if not Assigned(Element) then Exit;
+  if Element.Caption='' then Exit;
+  // Only count for the cell that actually owns this position (not span members).
+  if FHeaderLevels.IndexOf(Element.FLevel)<>ALevel then Exit;
+  if HeaderCellIsFiller(ALevel, ACol) then Exit;
+
+  Canvas.Font.Assign(FCellFont);
+  if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+  if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+  if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
+
+  var BaseTH:=Canvas.TextHeight('A');
+
+  if HeaderCellWordWrap(Element) then begin
+    var W:=HeaderElementTextWidth(ALevel, ACol);
+    var MeasureRect:=TRectF.Create(0,0,W,100000);
+    Canvas.MeasureText(MeasureRect,Element.Caption,True,[],
+                       TTextAlign.Leading,TTextAlign.Leading);
+    Result:=Max(1,Ceil(MeasureRect.Height/Max(BaseTH,1)));
+  end else
+    Result:=Max(CountLines(Element.Caption),1);
+end;
+
+function TMultiHeaderGrid.BalanceHeaderColumnWidths: Boolean;
+// In a single pass, find columns whose header caption wrapped onto substantially
+// more lines than the typical column (the average line count, rounded up) and
+// widen them just enough to bring them down toward that typical height - NOT all
+// the way to a single line, which would leave the header cell with blank, unused
+// lines. Capped by the caption's true one-line width and the column's MaxWidth /
+// MaxColumnAutoWidth. No viewport budget and no borrowing from other columns - if
+// the result exceeds the viewport the grid scrolls horizontally. Re-fits header
+// heights and returns True if any width changed.
+var
+  i, lvl: Integer;
+begin
+  Result:=False;
+  if FColCount<=0 then Exit;
+
+  var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
+  var CellDelimterWidth:=FGridLineWidth/2;
+  var CellPaddingFull:=CellPaddingWidth+CellDelimterWidth+1;
+
+  // Per column: worst wrapped-line count over all its header levels, plus the
+  // single-line width its widest-wrapping caption would need (the growth cap).
+  // Also remember WHICH element drives that worst count, so we can re-measure its
+  // caption at trial widths when deciding how far to widen.
+  var ColLines: TArray<Integer>;  SetLength(ColLines, FColCount);
+  var ColOneLineW: TArray<Single>; SetLength(ColOneLineW, FColCount);
+  var ColElement: TArray<THeaderElement>; SetLength(ColElement, FColCount);
+  // Width contributed by the OTHER columns of the worst element's span (0 for a
+  // single-column header). Added to a trial column width to get the element's
+  // total text width when re-measuring.
+  var ColSpanOther: TArray<Single>; SetLength(ColSpanOther, FColCount);
+  var MaxLines:=1;
+  var SumLines:=0;
+
+  for i:=0 to FColCount-1 do begin
+    ColLines[i]:=1;
+    ColOneLineW[i]:=0;
+    ColElement[i]:=nil;
+    ColSpanOther[i]:=0;
+    for lvl:=0 to FHeaderLevels.Count-1 do begin
+      var Lines:=HeaderElementLineCount(lvl, i);
+      if Lines>=ColLines[i] then begin
+        if Lines>ColLines[i] then ColLines[i]:=Lines;
+        // Width the widest caption line of this element needs on ONE line, so we
+        // know how far it is worth growing the column (never beyond this).
+        var Element:=FHeaderLevels.GetElementAtCell(i,lvl);
+        if Assigned(Element) then begin
+          ColElement[i]:=Element;
+          // The element's current total text width minus this column's share -
+          // i.e. what the rest of the span already contributes. For a single
+          // column header this is ~0. Uses the SAME text inset the renderer and
+          // HeaderElementTextWidth apply (Left+Right padding + full grid line).
+          var TextInset:=CellPadding.Left+CellPadding.Right+FGridLineWidth;
+          var TotalTextW:=HeaderElementTextWidth(lvl, i);
+          ColSpanOther[i]:=Max(0, TotalTextW-(FColData[i].Widths-TextInset));
+
+          Canvas.Font.Assign(FCellFont);
+          if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+          if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+          if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
+          var OneLine:Single:=0;
+          for var Ln in Element.Caption.Split([#13#10]) do
+            OneLine:=Max(OneLine,Canvas.TextWidth(Ln));
+          // Per-spanned-column share of the one-line caption width.
+          var Span:=Element.FColSpan; if Span<1 then Span:=1;
+          ColOneLineW[i]:=Max(ColOneLineW[i],
+            OneLine/Span+CellPaddingFull);
+        end;
+      end;
+    end;
+    if ColLines[i]>MaxLines then MaxLines:=ColLines[i];
+    SumLines:=SumLines+ColLines[i];
+  end;
+
+  // Nothing wraps onto multiple lines - the band is already balanced.
+  if MaxLines<=1 then Exit;
+
+  // The "typical" line count is the AVERAGE rounded up. A column must wrap onto
+  // substantially more lines than this to be considered over-tall.
+  var Threshold:=Ceil(SumLines/FColCount);
+  if Threshold<1 then Threshold:=1;
+
+  // A column is treated as over-tall only when it wraps onto more than
+  // (Threshold + AllowedExcess) lines. When we widen one, we bring it down only
+  // to that boundary - NOT all the way to the typical height, which for a long
+  // caption would demand a huge width (e.g. 9 lines -> 2 needs ~4.5x the width).
+  // Landing at the boundary keeps the column only as wide as needed to stop being
+  // an outlier.
+  const AllowedExcess = 3;
+  var TargetLines:=Max(2,Threshold+AllowedExcess);
+
+  for i:=0 to FColCount-1 do begin
+    if ColLines[i]<=Threshold+AllowedExcess then Continue; // not over-tall
+    if ColLines[i]<3 then Continue;
+    if not Assigned(ColElement[i]) then Continue;
+
+    var Cur:=FColData[i].Widths;
+
+    var Cap:=ColOneLineW[i];
+    var ColMax:=Max(FMaxColumnAutoWidth,FColData[i].MaxWidth);
+    if Cap>ColMax then Cap:=ColMax;
+    if Cap<=Cur+1 then Continue;                  // already at/over its cap
+
+    // Measure how many lines this column's governing caption needs at a trial
+    // COLUMN width - by laying the caption out at the matching text width. This
+    // is exact (no inverse-proportional guess), so a long single word or uneven
+    // lines can't fool us into over-widening.
+    var Element:=ColElement[i];
+    Canvas.Font.Assign(FCellFont);
+    if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+    if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+    if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
+    var BaseTH:=Canvas.TextHeight('A');
+    var SpanOther:=ColSpanOther[i];
+
+    // Lines needed if this column were width W. Uses the same text inset the
+    // renderer applies, so the measured count matches what is actually drawn.
+    var TextInset:=CellPadding.Left+CellPadding.Right+FGridLineWidth;
+    var LinesAt: TFunc<Single,Integer> :=
+      function(W: Single): Integer
+      begin
+        var TextW:=(W-TextInset)+SpanOther;
+        if TextW<1 then TextW:=1;
+        var R:=TRectF.Create(0,0,TextW,100000);
+        Canvas.MeasureText(R,Element.Caption,True,[],
+                           TTextAlign.Leading,TTextAlign.Leading);
+        Result:=Max(1,Ceil(R.Height/Max(BaseTH,1)));
+      end;
+
+    // Binary-search the SMALLEST column width in (Cur, Cap] whose caption fits in
+    // TargetLines or fewer. If even Cap can't reach TargetLines (very long text),
+    // we still grow only to Cap.
+    var Lo:Single:=Cur;
+    var Hi:Single:=Cap;
+    if LinesAt(Hi)>TargetLines then begin
+      // Cap itself still wraps past target - just use Cap.
+      Lo:=Hi;
+    end else begin
+      // Narrow down to ~1px. Hi always satisfies, Lo never does.
+      while Hi-Lo>1 do begin
+        var Mid:=(Lo+Hi)/2;
+        if LinesAt(Mid)<=TargetLines then Hi:=Mid else Lo:=Mid;
+      end;
+    end;
+
+    var Target:=Hi;
+    if Target>Cur+1 then begin
+      ColWidths[i]:=Round(Target);
+      if FColData[i].Widths<>Round(Cur) then Result:=True;
+    end;
+  end;
+
+  if Result then
+    AutoSizeHeaders;
 end;
 
 procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False);
