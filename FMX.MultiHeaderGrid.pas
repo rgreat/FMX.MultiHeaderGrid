@@ -335,6 +335,14 @@ type
       FOnCellClick: TNotifyEvent;
       FOnHeaderClick: TNotifyEvent;
 
+      // VCL-TDBGrid-like column focus events. FLastColEvent holds the column
+      // index OnColEnter last fired for, so OnColExit/OnColEnter fire once per
+      // genuine column change regardless of the path (mouse, keyboard or
+      // programmatic Col:=). -1 means "no column entered yet".
+      FOnColEnter: TNotifyEvent;
+      FOnColExit: TNotifyEvent;
+      FLastColEvent: Integer;
+
       FHeaderFont: TFont;
       FHeaderFontColor: TAlphaColor;
       FHeaderCellColor: TAlphaColor;
@@ -766,6 +774,25 @@ type
     property Width;
     property OnDblClick;
     property OnResize;
+    // --- Layer 1: events the grid does not intercept (fire natively) ---
+    property OnEnter;
+    property OnExit;
+    property OnMouseEnter;
+    property OnMouseLeave;
+    property OnMouseWheel;
+    property OnGesture;
+    property OnDragEnter;
+    property OnDragLeave;
+    property OnDragOver;
+    property OnDragDrop;
+    property OnDragEnd;
+    // --- Layer 2: events the grid intercepts; dispatch ensured in the
+    //     overridden MouseMove / KeyDown (inherited now called) ---
+    property OnMouseDown;
+    property OnMouseMove;
+    property OnMouseUp;
+    property OnKeyDown;
+    property OnKeyUp;
 
     property ColCount: Integer read FColCount write SetColCount default 5;
     property RowCount: Integer read FRowCount write SetRowCount default 10;
@@ -836,6 +863,10 @@ type
     property OnStartEditing: TStartEditingEvent read FOnStartEditing write FOnStartEditing;
     property OnCellClick: TNotifyEvent read FOnCellClick write FOnCellClick;
     property OnHeaderClick: TNotifyEvent read FOnHeaderClick write FOnHeaderClick;
+    // VCL TDBGrid-like column focus events (fire on a genuine column change
+    // via mouse, keyboard or programmatic Col:=).
+    property OnColEnter: TNotifyEvent read FOnColEnter write FOnColEnter;
+    property OnColExit: TNotifyEvent read FOnColExit write FOnColExit;
 
     property ResizeEnabled: Boolean read FResizeEnabled write SetResizeEnabled default True;
     property ResizeRowEnabled: Boolean read FResizeRowEnabled write FResizeRowEnabled default True;
@@ -1660,6 +1691,7 @@ var
 begin
   inherited;
 
+  FLastColEvent:=-1; // no column entered yet (OnColEnter/OnColExit guard)
   FEditWidenAnchor:=-1;
   FAutoSizePrecise:=False; // fast until the user requests a precise AutoSize
   FColCount:=5;
@@ -4089,6 +4121,8 @@ var
   NewWidth, NewHeight : Integer;
   GlobalPos           : TPointF;
 begin
+  inherited;  // fire user OnMouseMove before the grid's own resize handling
+
   if FResizeEnabled then begin
     case FResizeMode of
       TResizeMode.rmColumn: begin
@@ -4206,6 +4240,12 @@ var
   MergedCellOld    : TMergedCell;
   MergedCellNew    : TMergedCell;
 begin
+
+  // Fire the user's OnKeyDown first (VCL-like). A handler may consume the key
+  // by setting Key:=0 and KeyChar:=#0, in which case the grid skips its own
+  // navigation / editing handling below.
+  inherited;
+  if (Key=0) and (KeyChar=#0) then Exit;
 
   if IsFocused then begin
     var DX:=0;
@@ -4382,6 +4422,18 @@ end;
 
 procedure TMultiHeaderGrid.DoSelectCell;
 begin
+  // Column-focus change: OnColExit for the old column, OnColEnter for the new.
+  // Fired here (not in SetCol) so keyboard/mouse navigation - which set
+  // FSelectedCell.X directly - are covered too. FLastColEvent guards against
+  // duplicate firing when only the row changed.
+  if FSelectedCell.X<>FLastColEvent then begin
+    if (FLastColEvent>=0) and Assigned(FOnColExit) then
+      FOnColExit(Self);
+    FLastColEvent:=FSelectedCell.X;
+    if (FSelectedCell.X>=0) and Assigned(FOnColEnter) then
+      FOnColEnter(Self);
+  end;
+
   if Assigned(FOnSelectCell) then
     FOnSelectCell(Self);
 end;
