@@ -806,7 +806,7 @@ type
     // column widths against the available viewport: grows wrapped columns back
     // toward their one-line width when there's spare horizontal space (less
     // wrapping), and shrinks proportionally toward word width on overflow.
-    // On by default; turn off for the original wrap-to-word-width behaviour.
+    // On by default; turn off to size wrapped columns purely to word width.
     property ConservativeWrap: Boolean read FConservativeWrap write SetConservativeWrap default True;
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
@@ -3095,11 +3095,9 @@ begin
     TextHeight:=MeasureRect.Height;
   end else begin
     // Plain (no-wrap) text: height is simply the line count times the line
-    // height. (Earlier this subtracted LineCount*FGridLineWidth - one gridline
-    // per text line - which has no geometric basis: gridlines sit *between
-    // rows*, not between text lines inside a cell. That made multi-line cells a
-    // couple of pixels too short, so the editor/AutoSize height disagreed with
-    // the initial fast-path height. Removing it makes all sizing paths agree.)
+    // height. No gridline adjustment is applied per text line, because
+    // gridlines sit *between rows*, not between text lines inside a cell;
+    // this keeps every sizing path (fast-path, AutoSize, editor) in agreement.
     var LineCount:=CountLines(AText);
     TextHeight:=Canvas.TextHeight('A')*LineCount;
   end;
@@ -3177,8 +3175,7 @@ begin
       // levels stacked directly above it (a short column's title is drawn over
       // the combined filler+title rect - see HeaderMergedRect). Count those
       // fillers so a tall/wrapped title spreads its height across the whole
-      // stack instead of forcing its own single level to grow (which made the
-      // header rows too tall and left the filler levels unaccounted for).
+      // stack instead of forcing its own single level to grow.
       var TopLevel:=i;
       while (TopLevel>0) and HeaderCellIsFiller(TopLevel-1, DrawCol) do
         Dec(TopLevel);
@@ -3383,7 +3380,7 @@ begin
           HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word));
     end;
 
-    // Optimization: if this column has no WordWrap, use the original fast logic
+    // Optimization: if this column has no WordWrap, use the fast logic
     var ColHasWordWrap:=FWordWrap or FColData[i].WordWrap or FGridCellsHasWordWrap;
 
     if not ColHasWordWrap and UseFastMode then begin
@@ -4603,9 +4600,9 @@ begin
   DoSetCellStyle(ACol, ARow, Value);
 
   // If the new per-cell style turns word-wrap on where it was off, the row's
-  // height can change; fit just that row now (the removed per-Paint pass used
-  // to catch this). Comparing before/after means merge/clear operations that
-  // merely rewrite an already-wrapped style don't trigger a needless pass.
+  // height can change; fit just that row now. Comparing before/after means
+  // merge/clear operations that merely rewrite an already-wrapped style don't
+  // trigger a needless pass.
   if (not FSuppressAutoSize) and (ARow>=0) and (ARow<FRowCount) and
      (not WrappedBefore) and EffectiveCellWordWrap(ACol, ARow) then begin
     AutoSizeRows(ARow, ARow, FAutoSizePrecise);
@@ -5954,8 +5951,7 @@ procedure TMultiHeaderGrid.SetWordWrap(const Value: Boolean);
 begin
   if FWordWrap<>Value then begin
     FWordWrap:=Value;
-    // Row heights depend on wrap, so re-fit them now (the per-Paint autosize
-    // that used to do this was removed for performance). Skipped during a
+    // Row heights depend on wrap, so re-fit them now. Skipped during a
     // bulk rebuild, which does its own single sizing pass at the end.
     if not FSuppressAutoSize and Value then begin
       AutoSizeRows(FAutoSizePrecise);
@@ -6590,8 +6586,7 @@ begin
     FLastColLayout:=Layout;
 
     // Preserve the current header row heights so a non-structural rebuild does
-    // not flatten them back to the fixed build-time default (which made every
-    // header row the same size when the Limit-widths checkbox was toggled).
+    // not flatten them back to the fixed build-time default.
     var SavedHeights: TArray<Integer>;
     if not LayoutChanged then begin
       SetLength(SavedHeights, FHeaderLevels.Count);
@@ -6638,7 +6633,7 @@ begin
     UpdateRowCount;
 
     // Rows just got default heights from UpdateRowCount; if the grid wraps,
-    // fit them to content now (the removed per-Paint pass used to do this).
+    // fit them to content now.
     if GridHaveWordWrap then begin
       AutoSizeRows(FAutoSizePrecise);
       UpdateSize;
@@ -6799,6 +6794,17 @@ begin
   // table, but never resurrects columns the user deleted on the same table.
   if Sig<>FLastAutoSig then begin
     FLastAutoSig:=Sig;
+    // The dataset structure changed (different table/query), so any existing
+    // columns were built against the OLD field set and are now meaningless:
+    // fields shared by both tables would otherwise keep their old (earlier)
+    // collection index and stay in front of the new table's columns. Clear
+    // them so AutoCreateColumns rebuilds in the NEW table's field order.
+    FColumns.BeginUpdate;
+    try
+      FColumns.Clear;
+    finally
+      FColumns.EndUpdate;
+    end;
     AutoCreateColumns; // rebuilds via the collection's Update -> ResetTable
     // If the table genuinely had no visible fields, AutoCreateColumns adds
     // nothing and no rebuild is triggered; ensure the grid is still reset.
@@ -8122,9 +8128,9 @@ begin
   FEditField:=nil;
 
   // The committed value may need a different number of wrapped lines, so re-fit
-  // the row height (the base CommitEditorValue does the same for Cells[]; the
-  // removed per-Paint autosize no longer covers this). Merged cells span a
-  // range. Done before Invalidate so the new height paints immediately.
+  // the row height (the base CommitEditorValue does the same for Cells[]).
+  // Merged cells span a range. Done before Invalidate so the new height paints
+  // immediately.
   if Result and (ARow>=0) and (ARow<FRowCount) then begin
     var MergedCell: TMergedCell;
     if IsMergedCell(ACol,ARow,MergedCell) then
