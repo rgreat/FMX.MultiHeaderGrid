@@ -4240,6 +4240,7 @@ var
   MergedCellOld    : TMergedCell;
   MergedCellNew    : TMergedCell;
 begin
+  if not FPainted then Exit;
 
   // Fire the user's OnKeyDown first (VCL-like). A handler may consume the key
   // by setting Key:=0 and KeyChar:=#0, in which case the grid skips its own
@@ -4340,6 +4341,7 @@ begin
     until (OldCol=NewCol) and (OldRow=NewRow);
 
     if (NewCol<>FSelectedCell.X) or (NewRow<>FSelectedCell.Y) then begin
+      FPainted:=False;
       FSelectedCell:=Point(NewCol, NewRow);
 
       ScrollToSelectedCell;
