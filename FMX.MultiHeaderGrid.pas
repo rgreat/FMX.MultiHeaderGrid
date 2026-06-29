@@ -398,8 +398,9 @@ type
       // to many columns at once, so the per-setter row re-fit doesn't run once
       // per column. The caller does a single sizing pass when finished.
       FSuppressAutoSize: Boolean;
-      // True only while AutoSizeRows runs. On-demand descendants check this and
-      // skip fetching during the measurement sweep (it iterates every row).
+      // True only while AutoSizeRows runs. Row-provider descendants check this
+      // and skip extending RowCount during the measurement sweep (it iterates
+      // every row).
       FInLayout: Boolean;
       FGridCellsHasWordWrap: boolean;
       // Precision of the last explicit AutoSize the user requested. Internal
@@ -568,7 +569,7 @@ type
     procedure SetCellPadding(const Value: TBounds);
     procedure SetHeaderFontColor(const Value: TAlphaColor);
     procedure SetCellFontColor(const Value: TAlphaColor);
-    procedure SetViewTop(const Value: Integer);
+    procedure SetViewTop(const Value: Integer); virtual;
     procedure VScrollBarChange(Sender: TObject);
     procedure HScrollBarChange(Sender: TObject);
 
@@ -661,23 +662,14 @@ type
     procedure DoColumnResized; virtual;
     procedure DoHeaderRowResized; virtual;
     procedure DoRowResized; virtual;
-    // Called from SetViewTop before the new top is clamped to the last known
-    // row, so on-demand descendants can fetch more rows (else the viewport can
-    // never grow past materialized rows). Base is a no-op.
-    procedure EnsureRowsForViewport(ATargetTop: Integer); virtual;
-    // Ensure grid row ARow is materialized (on-demand descendants fetch toward
-    // it and grow RowCount). Used by keyboard navigation so moving down is not
-    // capped at the fetched-row boundary. Base is a no-op.
+    // Called from keyboard navigation before moving down, so the target row can
+    // be provided and the move is not capped at the current RowCount.
     procedure EnsureRowAvailable(ARow: Integer); virtual;
-    // Fetch the entire dataset (used by the End key, an explicit request for the
-    // last record). On-demand descendants step to Eof. Base is a no-op.
-    procedure EnsureAllRowsFetched; virtual;
-    // True only while AutoSizeRows runs (read by on-demand descendants).
+    // True only while AutoSizeRows runs (read by row-provider descendants).
     function  InLayout: Boolean;
-    // Upper row bound (exclusive) for the AutoSizeCols content scan. Base grids
-    // scan all rows; the DB grid overrides this to the rows fetched so far, so
-    // on a non-sequenced cursor column auto-fit considers only materialized rows
-    // (C-fit-fetched) instead of force-fetching the whole table.
+    // Upper row bound (exclusive) for the AutoSizeCols content scan. A base grid
+    // scans all rows; a row-provider descendant overrides this to the rows it has
+    // available so auto-fit does not force the whole set to be provided.
     function  ColScanRowLimit: Integer; virtual;
     procedure DoGridScroll; virtual;
 
@@ -1007,7 +999,7 @@ type
       FCellTexts: TRowsData;
       FRowCacheSize: integer;
       FUpdatingRow: Boolean; // guards against recursion when syncing Row <-> DataSet.RecNo
-      // --- Option C: bookmark index + live fetch -------------------------
+      // --- On-demand rows: bookmark index + live fetch -------------------
       // For a non-sequenced cursor (FireDAC on-demand, unidirectional, provider
       // cursors) RecNo/RecordCount are not a reliable absolute index. The grid
       // then runs FALLBACK mode: rows are located by Bookmark via a per-row
@@ -1018,6 +1010,7 @@ type
       // unchanged. Decision is cached per open in FRecNoChecked.
       FUseBookmarkFallback: Boolean;        // True => fallback (bookmark) mode active
       FRecNoChecked: Boolean;               // fallback decision made for this open
+      FFetchesOnDemand: Boolean;            // cached: dataset fetches rows lazily (FetchOptions.Mode)
       FRowBmList: TList<TBookmark>;          // ARow -> bookmark, grown on demand
       FAllRowsFetched: Boolean;             // True once a live fetch reached Eof
       FLiveFetching: Boolean;               // re-entrancy guard: cursor stepping in progress
@@ -1031,6 +1024,13 @@ type
       // and re-positioning the cursor - which would fire DataSetScrolled and move
       // the selection (the "End needs two presses" bug).
       FNativeAllFetched: Boolean;
+      // End-key on-demand fetch state. FEndFetching is set while End is paging to
+      // Eof; any real key or mouse click sets FEndFetchCancelled to stop it.
+      // FEndSynthetic marks the loop's own Page Down presses so they are not
+      // treated as user input that cancels.
+      FEndFetching: Boolean;
+      FEndFetchCancelled: Boolean;
+      FEndSynthetic: Boolean;
       FColumns: TMHGColumns;
       // Grid-wide default formats for the field -> cell-string conversion of
       // date / time / datetime fields, used when a column has no explicit
@@ -1105,10 +1105,22 @@ type
     // the grid has none AND this is a genuinely new source/table (a signature
     // we have not auto-created for before), then rebuilds.
     procedure HandleActiveChanged;
-    // --- Option C helpers (bookmark index + live fetch) ----------------
+    // --- On-demand row helpers (bookmark index + live fetch) -----------
     // Decides once (cached) whether the native RecNo/RecordCount path is usable.
     // Uses TDataSet.IsSequenced (the VCL TCustomDBGrid test) plus guards.
     function  DataSetSupportsRecNo(DS: TDataSet): Boolean;
+    // True when the dataset fetches rows on demand, so RecordCount only counts
+    // rows fetched so far and the true end is unknown until stepped. Detected via
+    // the FireDAC FetchOptions.Mode RTTI property (IsSequenced is unreliable - it
+    // is True even under on-demand fetch). False when not detectable.
+    function  DataSetFetchesOnDemand(DS: TDataSet): Boolean;
+    // True when the End key must discover the end by fetching on demand (the
+    // bookmark/live-fetch path before Eof, or an on-demand native cursor not yet
+    // fully fetched). False when the end is already known, so End jumps to it.
+    function  EndIsOnDemand: Boolean;
+    // Runs the cancellable, repainting page-down loop driving the dataset to Eof
+    // (or until the user cancels). Invoked from KeyDown on a real End press.
+    procedure RunEndFetch;
     // Effective row count: RecordCount natively, FRowBmList.Count in fallback.
     function  EffectiveRowCount: Integer;
     // 0-based index of the current record: RecNo-1 natively, matching bookmark
@@ -1127,8 +1139,8 @@ type
     function  FetchedRowCount: Integer;
     // Native-path live growth: step the cursor forward (bounded by Eof) until
     // grid row ATargetRow is materialized, or to Eof when ATargetRow < 0, then
-    // adopt the grown RecordCount. Shared by EnsureRowAvailable / -AllRowsFetched
-    // / -RowsForViewport. No-op once the whole set is loaded.
+    // adopt the grown RecordCount. Shared by EnsureRowAvailable /
+    // EnsureRowsForViewport and the End-key fetch. No-op once fully loaded.
     procedure GrowNativeTo(ATargetRow: Integer);
   protected
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
@@ -1136,12 +1148,17 @@ type
     procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
     procedure DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle); override;
     procedure DoSelectCell; override;
-    // Option C scroll/grow overrides.
+    // Row-provider overrides: the DB grid supplies rows on demand from the
+    // dataset, growing RowCount as the grid navigates/scrolls/scans.
     procedure DoGridScroll; override;
-    procedure EnsureRowsForViewport(ATargetTop: Integer); override;
+    procedure EnsureRowsForViewport(ATargetTop: Integer);
     procedure EnsureRowAvailable(ARow: Integer); override;
-    procedure EnsureAllRowsFetched; override;
     function  ColScanRowLimit: Integer; override;
+    // End-key handling and on-demand End-fetch cancellation live here (not in the
+    // base, which is dataset-agnostic): End on an on-demand cursor pages to Eof,
+    // cancellable by any other key or a mouse click.
+    procedure KeyDown(var Key: Word; var KeyChar: WideChar; Shift: TShiftState); override;
+    procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Single); override;
     // Data-bound inplace editing: a typed editor is chosen per field.
     function CanEditCell(ACol, ARow: Integer): Boolean; override;
     // Boolean fields toggle in place instead of opening an editor.
@@ -1170,6 +1187,7 @@ type
     function  GetEditorText: string; override;
     function  CommitEditorValue(ACol, ARow: Integer): Boolean; override;
     procedure PlaceEditorCaretAtEnd(Ed: TControl); override;
+    procedure SetViewTop(const Value: Integer); override;
     function  EditorMinColWidth(ACol, ARow: Integer): single; override;
     // The clear button on nullable TDateEdit/TTimeEdit editors takes extra
     // horizontal room that the base EditorMinColWidth (via MINW_*) doesn't
@@ -1294,7 +1312,7 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, FMX.Platform, System.StrUtils, FMX.Styles, FMX.Styles.Objects;
+  System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -3869,110 +3887,109 @@ begin
   // FRowData mid-loop. Fetching is driven by paint/scroll, not layout.
   FInLayout:=True;
   try
-  Canvas.Font.Assign(FCellFont);
+    Canvas.Font.Assign(FCellFont);
 
-  var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
-  var CellDelimterHeight:=FGridLineWidth;
-  var ViewBottomCell:=ViewBottom;
+    var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
+    var CellDelimterHeight:=FGridLineWidth;
+    var ViewBottomCell:=ViewBottom;
 
-  var ComputeMode:=TSizeComputeMode.cmSlow;
-  if FRowCount*FColCount>10000 then begin
-    ComputeMode:=TSizeComputeMode.cmFast;
-  end;
-  if ForcePrecise then begin
-    ComputeMode:=TSizeComputeMode.cmSlow;
-  end;
-  if GridHaveWordWrap then begin
-    ComputeMode:=TSizeComputeMode.cmFull;
-  end;
+    var ComputeMode:=TSizeComputeMode.cmSlow;
+    if FRowCount*FColCount>10000 then begin
+      ComputeMode:=TSizeComputeMode.cmFast;
+    end;
+    if ForcePrecise then begin
+      ComputeMode:=TSizeComputeMode.cmSlow;
+    end;
+    if GridHaveWordWrap then begin
+      ComputeMode:=TSizeComputeMode.cmFull;
+    end;
 
-  if FResizeStartColumnIndex<0 then begin
-    FResizeStartColumnIndex:=0;
-  end;
-  if FResizeEndColumnIndex<0 then begin
-    FResizeEndColumnIndex:=FColCount-1;
-  end;
+    if FResizeStartColumnIndex<0 then begin
+      FResizeStartColumnIndex:=0;
+    end;
+    if FResizeEndColumnIndex<0 then begin
+      FResizeEndColumnIndex:=FColCount-1;
+    end;
 
-  Canvas.Font.Assign(FCellFont);
-  var TH:=Canvas.TextHeight('A');
-  for var Row:=FromRow to FRowCount-1 do begin
-    if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
-       ((ToRow>=0) and (Row>ToRow)) then Break;
+    Canvas.Font.Assign(FCellFont);
+    var TH:=Canvas.TextHeight('A');
+    for var Row:=FromRow to FRowCount-1 do begin
+      if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
+         ((ToRow>=0) and (Row>ToRow)) then Break;
 
-    var MaxHeight:=TH;
+      var MaxHeight:=TH;
 
-    for var Col:=FResizeStartColumnIndex to FResizeEndColumnIndex do begin
+      for var Col:=FResizeStartColumnIndex to FResizeEndColumnIndex do begin
 
-      var RowSpan:=1;
-      var MergedCell: TMergedCell;
-      var TextLines: Single;
-      if IsMergedCell(Col,Row,MergedCell) then begin
-        TextLines:=Max(CountLines(Cells[MergedCell.Col,MergedCell.Row]),1);
-        RowSpan:=MergedCell.RowSpan;
-      end else begin
-        TextLines:=Max(CountLines(Cells[Col,Row]),1);
-      end;
+        var RowSpan:=1;
+        var MergedCell: TMergedCell;
+        var TextLines: Single;
+        if IsMergedCell(Col,Row,MergedCell) then begin
+          TextLines:=Max(CountLines(Cells[MergedCell.Col,MergedCell.Row]),1);
+          RowSpan:=MergedCell.RowSpan;
+        end else begin
+          TextLines:=Max(CountLines(Cells[Col,Row]),1);
+        end;
 
-      case ComputeMode of
-        cmFast: begin
-          // Fast calculation
+        case ComputeMode of
+          cmFast: begin
+            // Fast calculation
 
-          var CellStyle:=CellStyle[Col,Row];
-          var ResTH:=TH;
-          if CellStyle.FontSizeIsSet then begin
-            ResTH:=ResTH/Canvas.Font.Size*CellStyle.FontSize;
-          end;
-          if CellStyle.FontStyleIsSet then begin
-            if (TFontStyle.fsBold in CellStyle.FontStyle) xor (TFontStyle.fsBold in Canvas.Font.Style) then begin
-              if TFontStyle.fsBold in CellStyle.FontStyle then begin
-                ResTH:=ResTH*1.1;
-              end else begin
-                ResTH:=ResTH*0.9;
+            var CellStyle:=CellStyle[Col,Row];
+            var ResTH:=TH;
+            if CellStyle.FontSizeIsSet then begin
+              ResTH:=ResTH/Canvas.Font.Size*CellStyle.FontSize;
+            end;
+            if CellStyle.FontStyleIsSet then begin
+              if (TFontStyle.fsBold in CellStyle.FontStyle) xor (TFontStyle.fsBold in Canvas.Font.Style) then begin
+                if TFontStyle.fsBold in CellStyle.FontStyle then begin
+                  ResTH:=ResTH*1.1;
+                end else begin
+                  ResTH:=ResTH*0.9;
+                end;
               end;
             end;
+
+            MaxHeight:=Max(MaxHeight,
+                           TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
           end;
 
-          MaxHeight:=Max(MaxHeight,
-                         TextLines*ResTH/RowSpan-(RowSpan-1)*CellDelimterHeight/4);
+          cmSlow,
+          cmFull: begin
+            // Precise calculation. Both the no-wrap (cmSlow) and word-wrap (cmFull)
+            // cases delegate to MeasureCellTextHeight - the same routine the inplace
+            // editor uses for its live row-fit. Sharing one measurement (identical
+            // font assignment, gridline subtraction and single-line floor) is what
+            // makes the committed-text row height and the editor's height agree for
+            // custom-sized/styled fonts; the previous inline formulas drifted from
+            // it and made styled rows shrink a pixel on edit start.
+            var ActualCol:=Col;
+            var ActualRow:=Row;
+            if IsMergedCell(Col,Row,MergedCell) then begin
+              ActualCol:=MergedCell.Col;
+              ActualRow:=MergedCell.Row;
+            end;
+            MaxHeight:=Max(MaxHeight,
+                           MeasureCellTextHeight(ActualCol,ActualRow,Cells[ActualCol,ActualRow],RowSpan));
+          end;
         end;
+      end;
 
-        cmSlow,
-        cmFull: begin
-          // Precise calculation. Both the no-wrap (cmSlow) and word-wrap (cmFull)
-          // cases delegate to MeasureCellTextHeight - the same routine the inplace
-          // editor uses for its live row-fit. Sharing one measurement (identical
-          // font assignment, gridline subtraction and single-line floor) is what
-          // makes the committed-text row height and the editor's height agree for
-          // custom-sized/styled fonts; the previous inline formulas drifted from
-          // it and made styled rows shrink a pixel on edit start.
-          var ActualCol:=Col;
-          var ActualRow:=Row;
-          if IsMergedCell(Col,Row,MergedCell) then begin
-            ActualCol:=MergedCell.Col;
-            ActualRow:=MergedCell.Row;
-          end;
-          MaxHeight:=Max(MaxHeight,
-                         MeasureCellTextHeight(ActualCol,ActualRow,Cells[ActualCol,ActualRow],RowSpan));
+      if (Row>=0) and (Row<Length(FRowData)) then begin
+        // Ceil (not Trunc) so this matches MemoEditorTextChanged's row-fit, which
+        // also Ceils. Flooring here while the editor Ceils made each edit re-floor
+        // the row a sub-pixel shorter than the editor had grown it, so repeated
+        // edits slowly shrank the row. Rounding both the same way removes that.
+        FRowData[Row].Height:=Ceil(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+        if Row>0 then begin
+          FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
         end;
       end;
     end;
 
-    if (Row>=0) and (Row<Length(FRowData)) then begin
-      // Ceil (not Trunc) so this matches MemoEditorTextChanged's row-fit, which
-      // also Ceils. Flooring here while the editor Ceils made each edit re-floor
-      // the row a sub-pixel shorter than the editor had grown it, so repeated
-      // edits slowly shrank the row. Rounding both the same way removes that.
-      FRowData[Row].Height:=Ceil(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
-      if Row>0 then begin
-        FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
-      end;
+    for var Row:=1 to Min(FRowCount-1,High(FRowData)) do begin
+      FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
     end;
-  end;
-
-  for var Row:=1 to Min(FRowCount-1,High(FRowData)) do begin
-    FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
-  end;
-//  Invalidate;
   finally
     FInLayout:=False;
   end;
@@ -4269,10 +4286,8 @@ begin
         DY:=-RowCount;
       end;
       vkEnd: begin
-        // "End" explicitly means the last record. On an on-demand cursor the
-        // true end is unknown until fetched, so fetch to Eof here (an explicit
-        // user request justifies the full fetch) then jump to the final row.
-        EnsureAllRowsFetched;
+        // Jump to the last row. Descendants that load rows on demand intercept
+        // End in their own KeyDown before this runs (see TMultiHeaderDBGrid).
         DY:=RowCount;
       end;
       vkPrior: begin  // Page Up
@@ -4755,10 +4770,6 @@ end;
 
 procedure TMultiHeaderGrid.SetViewTop(const Value: integer);
 begin
-  // Let on-demand descendants fetch more rows before we clamp to the current
-  // last row - otherwise the viewport can never grow past materialized rows.
-  EnsureRowsForViewport(Value);
-
   var BottomCellTop:=FRowData[High(FRowData)].Top;
   FViewTop:=Min(BottomCellTop,Max(0,Value));
 
@@ -5872,19 +5883,9 @@ begin
     FOnGridScroll(Self,ViewLeft,ViewTop);
 end;
 
-procedure TMultiHeaderGrid.EnsureRowsForViewport(ATargetTop: Integer);
-begin
-  // Base grids hold all rows; nothing to fetch. The DB grid overrides this.
-end;
-
 procedure TMultiHeaderGrid.EnsureRowAvailable(ARow: Integer);
 begin
-  // Base grids hold all rows; nothing to fetch. The DB grid overrides this.
-end;
-
-procedure TMultiHeaderGrid.EnsureAllRowsFetched;
-begin
-  // Base grids hold all rows; nothing to fetch. The DB grid overrides this.
+  // A base grid owns all its rows; a row-provider descendant overrides this.
 end;
 
 function TMultiHeaderGrid.InLayout: Boolean;
@@ -6539,6 +6540,15 @@ begin
   end;
 end;
 
+procedure TMultiHeaderDBGrid.SetViewTop(const Value: Integer);
+begin
+  // Fetch more rows before we clamp to the current last row,
+  // otherwise the viewport can never grow past materialized rows.
+  EnsureRowsForViewport(Value);
+
+  inherited;
+end;
+
 procedure TMultiHeaderDBGrid.RefreshCells;
 begin
   FCellTexts.Clear;
@@ -6833,6 +6843,7 @@ begin
   // A close or (re)open invalidates the probe decision and the bookmark index.
   FRecNoChecked:=False;
   FUseBookmarkFallback:=False;
+  FFetchesOnDemand:=False;
   FNativeAllFetched:=False;
   ClearRowBookmarks;
 
@@ -6900,6 +6911,7 @@ begin
 
   FRecNoChecked:=True;
   FUseBookmarkFallback:=False;
+  FFetchesOnDemand:=DataSetFetchesOnDemand(DS); // probe once; cheap to read thereafter
 
   if (DS=nil) or (not DS.Active) then Exit(True);
 
@@ -6917,6 +6929,41 @@ begin
   end;
 
   Result:=not FUseBookmarkFallback;
+end;
+
+function TMultiHeaderDBGrid.DataSetFetchesOnDemand(DS: TDataSet): Boolean;
+// FireDAC datasets expose FetchOptions.Mode (TFDFetchMode = fmManual, fmOnDemand,
+// fmAll, fmExactRecsMax). fmManual/fmOnDemand fetch rows lazily, so RecordCount is
+// only the rows fetched so far; fmAll/fmExactRecsMax materialize everything up
+// front. Probe it via RTTI so the grid keeps no compile-time FireDAC dependency.
+// Any dataset without FetchOptions (or where the probe fails) is treated as not
+// on-demand.
+begin
+  Result:=False;
+  if (DS=nil) or (not DS.Active) then Exit;
+  try
+    var Ctx:=TRttiContext.Create;
+    try
+      var T:=Ctx.GetType(DS.ClassType);
+      if T=nil then Exit;
+      var FetchProp:=T.GetProperty('FetchOptions');
+      if FetchProp=nil then Exit;               // not a FireDAC dataset
+      var FetchVal:=FetchProp.GetValue(DS);
+      if FetchVal.IsEmpty or (not FetchVal.IsObject) then Exit;
+      var FetchObj:=FetchVal.AsObject;
+      if FetchObj=nil then Exit;
+      var ModeProp:=Ctx.GetType(FetchObj.ClassType).GetProperty('Mode');
+      if ModeProp=nil then Exit;
+      // TFDFetchMode = (fmManual=0, fmOnDemand=1, fmAll=2, fmExactRecsMax=3).
+      // fmManual and fmOnDemand fetch lazily (RecordCount is only rows fetched so
+      // far); fmAll and fmExactRecsMax materialize the whole set up front.
+      Result:=ModeProp.GetValue(FetchObj).AsOrdinal<2;
+    finally
+      Ctx.Free;
+    end;
+  except
+    Result:=False; // probe failed - assume not on-demand
+  end;
 end;
 
 procedure TMultiHeaderDBGrid.ClearRowBookmarks;
@@ -7227,25 +7274,76 @@ begin
   end;
 end;
 
-procedure TMultiHeaderDBGrid.EnsureAllRowsFetched;
-// Fetch the whole dataset to Eof and set RowCount to the true total. Used by the
-// End key. Honours both modes.
+function TMultiHeaderDBGrid.EndIsOnDemand: Boolean;
+// End must page on demand (the cancellable, repainting loop) whenever the true
+// end is not yet known: the bookmark-fallback path before Eof, or a native cursor
+// that fetches lazily (FetchOptions.Mode is fmManual/fmOnDemand) and is not yet
+// fully fetched. A fully-materialized cursor returns False, so End jumps straight
+// to the last row. IsSequenced is deliberately not used - it is True even
+// on-demand.
 begin
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then Exit;
+  if FUseBookmarkFallback then
+    Exit(not FAllRowsFetched);
+  Result:=FFetchesOnDemand and (not FNativeAllFetched);
+end;
 
-  if FUseBookmarkFallback then begin
-    if FAllRowsFetched then Exit;
-    var Guard:=0;
-    while not FAllRowsFetched do begin
-      var Before:=FRowBmList.Count;
-      FetchRowsUpTo(-1); // -1 = one more chunk, until FAllRowsFetched
-      if (FRowBmList.Count=Before) and (not FAllRowsFetched) then Break;
-      Inc(Guard); if Guard>1000000 then Break;
+procedure TMultiHeaderDBGrid.RunEndFetch;
+// Page down repeatedly - reusing the base vkNext handling (grow + move + scroll +
+// OnSelectCell) - until the selection stops advancing (Eof) or the user cancels.
+// The synthetic presses are marked FEndSynthetic so the cancel check in KeyDown
+// ignores them; any real key or mouse click sets FEndFetchCancelled.
+begin
+  FEndFetchCancelled:=False;
+  FEndFetching:=True;
+  try
+    var PrevRow:=-1;
+    while (FSelectedCell.Y<>PrevRow) and EndIsOnDemand and (not FEndFetchCancelled) do begin
+      PrevRow:=FSelectedCell.Y;
+      FEndSynthetic:=True;        // mark the next press as our own (not user input)
+      FPainted:=True;             // allow the synthetic press through the base paint gate
+      var K: Word:=vkNext; var KC: WideChar:=#0;
+      inherited KeyDown(K,KC,[]); // one page down via the base navigation
+      FEndSynthetic:=False;
+      Repaint;                      // show the new rows immediately
+      Application.ProcessMessages;  // non-blocking: deliver any pending user key/click that cancels
     end;
-    if RowCount<>FRowBmList.Count then RowCount:=FRowBmList.Count;
-  end else
-    GrowNativeTo(-1); // step to Eof
+  finally
+    FEndFetching:=False;
+    FEndSynthetic:=False;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.KeyDown(var Key: Word; var KeyChar: WideChar; Shift: TShiftState);
+begin
+  // Cancel an in-progress End fetch on any real key except another End (which
+  // would just restart it) and except our own synthetic Page Down presses.
+  if FEndFetching and (not FEndSynthetic) and (Key<>vkEnd) then begin
+    FEndFetchCancelled:=True;
+    Key:=0; KeyChar:=#0;
+    Exit;
+  end;
+
+  // On-demand End: let the base run first (fires OnKeyDown and jumps to the last
+  // row fetched so far), then - if the user did not consume the key - page on to
+  // the true Eof. A fully-loaded cursor needs no extension; the base jump suffices.
+  if (Key=vkEnd) and (not FEndSynthetic) and FPainted and IsFocused and EndIsOnDemand then begin
+    inherited;
+    if Key<>0 then RunEndFetch; // not consumed by a user OnKeyDown handler
+    Key:=0; KeyChar:=#0;
+    Exit;
+  end;
+
+  inherited;
+end;
+
+procedure TMultiHeaderDBGrid.MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Single);
+begin
+  // A mouse click cancels an in-progress End fetch.
+  if FEndFetching then begin
+    FEndFetchCancelled:=True;
+    Exit;
+  end;
+  inherited;
 end;
 
 procedure TMultiHeaderDBGrid.EnsureRowAvailable(ARow: Integer);
