@@ -434,6 +434,9 @@ type
       FKeepEditorWidenedColumn: Boolean;
       FReadOnly: Boolean;
       FPainted: boolean;
+      // Set while the base handles vkEnd so the shared down-navigation skips the
+      // synchronous on-demand grow; the DB descendant pages to Eof separately.
+      FEndJump: boolean;
       FMaxColumnAutoWidth: integer;
 
     function ResizeStartWidth: Integer;
@@ -4259,6 +4262,8 @@ var
 begin
   if not FPainted then Exit;
 
+  FEndJump:=False;
+
   // Fire the user's OnKeyDown first (VCL-like). A handler may consume the key
   // by setting Key:=0 and KeyChar:=#0, in which case the grid skips its own
   // navigation / editing handling below.
@@ -4286,9 +4291,11 @@ begin
         DY:=-RowCount;
       end;
       vkEnd: begin
-        // Jump to the last row. Descendants that load rows on demand intercept
-        // End in their own KeyDown before this runs (see TMultiHeaderDBGrid).
+        // Jump to the last row already fetched. On-demand descendants extend past
+        // this to the true Eof in their own KeyDown (page-by-page, repainting),
+        // so End must not synchronously grow the cursor here - that blocks the UI.
         DY:=RowCount;
+        FEndJump:=True;
       end;
       vkPrior: begin  // Page Up
         DY:=-Trunc(ViewCellsHeight/DefaultRowHeight);
@@ -4341,7 +4348,9 @@ begin
       // On-demand grids only know FRowCount rows fetched so far. When moving
       // down, give a descendant the chance to fetch the target row first so the
       // clamp below does not stop at the fetched boundary. No-op on base grids.
-      if DY>0 then EnsureRowAvailable(NewRow+DY);
+      // End is excluded: it must land on the last fetched row without a blocking
+      // grow - the on-demand descendant pages on to Eof afterward.
+      if (DY>0) and (not FEndJump) then EnsureRowAvailable(NewRow+DY);
       NewRow:=Max(0, Min(FRowCount-1, NewRow+DY));
 
       if (NewCol<>FSelectedCell.X) or (NewRow<>FSelectedCell.Y) then begin
@@ -7252,7 +7261,8 @@ begin
         try
           if DS.RecordCount>0 then DS.RecNo:=DS.RecordCount; // resume at fetched edge
           var Guard:=0;
-          while (not DS.Eof) and ((ATargetRow<0) or (DS.RecordCount<=ATargetRow)) do begin
+          while (not DS.Eof) and ((ATargetRow<0) or (DS.RecordCount<=ATargetRow))
+                and (not FEndFetchCancelled) do begin // stop promptly when End fetch is cancelled
             DS.Next;
             Inc(Guard);
             if Guard>10000000 then Break;
@@ -7306,11 +7316,9 @@ begin
       inherited KeyDown(K,KC,[]); // one page down via the base navigation (clears FPainted)
       FEndSynthetic:=False;
       Repaint;                      // request a paint of the new rows
-      // Pump messages until that paint actually runs (FPainted back True) or the
-      // user cancels. This stops repaint requests from coalescing and being
-      // dropped by the FMX renderer.
-      while (not FPainted) and (not FEndFetchCancelled) do
-        Application.ProcessMessages;
+      // Yield once so the requested paint can run before the next press; this
+      // also delivers any pending user key/click that sets FEndFetchCancelled.
+      Application.ProcessMessages;
     end;
   finally
     FEndFetching:=False;
@@ -7320,9 +7328,10 @@ end;
 
 procedure TMultiHeaderDBGrid.KeyDown(var Key: Word; var KeyChar: WideChar; Shift: TShiftState);
 begin
-  // Cancel an in-progress End fetch on any real key except another End (which
-  // would just restart it) and except our own synthetic Page Down presses.
-  if FEndFetching and (not FEndSynthetic) and (Key<>vkEnd) then begin
+  // While an End fetch is running, swallow every real key (including another End,
+  // which would otherwise re-enter RunEndFetch and corrupt the loop state) except
+  // our own synthetic Page Down presses. Any swallowed key cancels the fetch.
+  if FEndFetching and (not FEndSynthetic) then begin
     FEndFetchCancelled:=True;
     Key:=0; KeyChar:=#0;
     Exit;
