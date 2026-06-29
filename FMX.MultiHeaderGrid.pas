@@ -7297,15 +7297,20 @@ begin
   FEndFetching:=True;
   try
     var PrevRow:=-1;
-    while (FSelectedCell.Y<>PrevRow) and EndIsOnDemand and (not FEndFetchCancelled) do begin
+    FPainted:=True;               // first synthetic press is allowed through the paint gate
+    while (FSelectedCell.Y<>PrevRow) and EndIsOnDemand and (not FEndFetchCancelled)
+          and FPainted do begin   // only advance once the previous Paint has completed
       PrevRow:=FSelectedCell.Y;
       FEndSynthetic:=True;        // mark the next press as our own (not user input)
-      FPainted:=True;             // allow the synthetic press through the base paint gate
       var K: Word:=vkNext; var KC: WideChar:=#0;
-      inherited KeyDown(K,KC,[]); // one page down via the base navigation
+      inherited KeyDown(K,KC,[]); // one page down via the base navigation (clears FPainted)
       FEndSynthetic:=False;
-      Repaint;                      // show the new rows immediately
-      Application.ProcessMessages;  // non-blocking: deliver any pending user key/click that cancels
+      Repaint;                      // request a paint of the new rows
+      // Pump messages until that paint actually runs (FPainted back True) or the
+      // user cancels. This stops repaint requests from coalescing and being
+      // dropped by the FMX renderer.
+      while (not FPainted) and (not FEndFetchCancelled) do
+        Application.ProcessMessages;
     end;
   finally
     FEndFetching:=False;
