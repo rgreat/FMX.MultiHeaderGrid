@@ -292,7 +292,7 @@ type
   TGridScrollEvent = procedure(Sender: TObject; Left,Top: Integer) of object;
 
   TResizeMode = (rmNone, rmColumn, rmHeaderRow, rmGridRow);
-
+  TResizeQuality = (rqNoChange, rqPrecise, rqFast);
   TScrollShowMode = (smAuto, smShow, smHide);
 
   TMultiHeaderGrid = class(TControl)
@@ -698,14 +698,17 @@ type
     procedure UnMergeCells(ACol, ARow: Integer);
     procedure ClearMergedCells;
 
-    procedure AutoSizeCols(ForcePrecise: boolean = False);
-    procedure AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False); overload;
-    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False); overload;
+    procedure AutoSizeCols;
+
+    procedure AutoSizeRows(FromRow: integer = 0; ToRow: integer = -1;
+                           FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1;
+                           TryOptimise: boolean = False);
+
     procedure AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
     // Sizes each header level's height to fit its (optionally wrapped or
     // multi-line) captions. Shared by all grid descendants.
     procedure AutoSizeHeaders;
-    procedure AutoSize(ForcePrecise: boolean = False);
+    procedure AutoSize(Precision: TResizeQuality = rqNoChange);
 
     procedure ClearSelection;
 
@@ -2910,14 +2913,19 @@ begin
     Result:=FEditor;
 end;
 
-procedure TMultiHeaderGrid.AutoSize(ForcePrecise: boolean = False);
+procedure TMultiHeaderGrid.AutoSize(Precision: TResizeQuality = rqNoChange);
 begin
   // Remember the mode the user asked for, so in-house re-sizes (editor re-fit,
   // commit re-fit, visible-rows pass) reuse it - fast stays fast, precise stays
   // pixel-consistent with the editor.
-  FAutoSizePrecise:=ForcePrecise;
-  AutoSizeCols(ForcePrecise); // also re-fits header heights to the new widths
-  AutoSizeRows(ForcePrecise);
+
+  case Precision of
+    rqPrecise: FAutoSizePrecise:=True;
+    rqFast: FAutoSizePrecise:=False;
+  end;
+
+  AutoSizeCols;
+  AutoSizeRows;
   UpdateSize;
 end;
 
@@ -3357,7 +3365,7 @@ begin
   end;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeCols(ForcePrecise:boolean=False);
+procedure TMultiHeaderGrid.AutoSizeCols;
 var
   i,j:Integer;
   Text:string;
@@ -3379,7 +3387,7 @@ begin
   var WordWidthCap:Single:=Max(200, VP*0.6);
 
   // Optimization: if there's no WordWrap, use the fast path
-  var UseFastMode:=not ForcePrecise and (FRowCount*FColCount>10000);
+  var UseFastMode:=not FAutoSizePrecise and (FRowCount*FColCount>10000);
 
   // Rows to scan for content width: all rows normally, or only fetched rows on
   // the DB grid's on-demand fallback (C-fit-fetched).
@@ -3875,20 +3883,21 @@ begin
     AutoSizeHeaders;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False);
-begin
-  AutoSizeRows(0, FRowCount-1, ForcePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex, TryOptimise);
-end;
-
 type
   TSizeComputeMode = (cmFast,cmSlow,cmFull);
 
-procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False);
+procedure TMultiHeaderGrid.AutoSizeRows(FromRow: integer = 0; ToRow: integer = -1;
+                                        FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1;
+                                        TryOptimise: boolean = False);
 begin
   // If a column rebuild is pending (deferred), do it first so we auto-size the
   // up-to-date layout rather than the stale one. No-op on grids without
   // deferred layout.
   EnsureLayout;
+
+  if ToRow<0 then begin
+    ToRow:=FRowCount-1;
+  end;
 
   if (FResizeStartColumnIndex<>-1) or (FResizeEndColumnIndex<>-1) then begin
     TryOptimise:=False;
@@ -3909,7 +3918,7 @@ begin
     if FRowCount*FColCount>10000 then begin
       ComputeMode:=TSizeComputeMode.cmFast;
     end;
-    if ForcePrecise then begin
+    if FAutoSizePrecise then begin
       ComputeMode:=TSizeComputeMode.cmSlow;
     end;
     if GridHaveWordWrap then begin
@@ -4029,7 +4038,7 @@ begin
   if First<0 then First:=0;
   var Last:=RowAtHeightCoord(ViewBottom);
   if Last<First then Last:=FRowCount-1; // viewport past the last row
-  AutoSizeRows(First, Last, FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex, True);
+  AutoSizeRows(First, Last, FResizeStartColumnIndex, FResizeEndColumnIndex, True);
 
   UpdateSize;
 end;
@@ -4235,7 +4244,7 @@ begin
       // row so off-screen rows (skipped during the live drag) match the new
       // wrap. No-op when the grid doesn't word-wrap.
       if WasColumnResize and GridHaveWordWrap then begin
-        AutoSizeRows(FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
+        AutoSizeRows(0,-1, FResizeStartColumnIndex, FResizeEndColumnIndex);
         UpdateSize;
       end;
 
@@ -4713,7 +4722,7 @@ begin
   // trigger a needless pass.
   if (not FSuppressAutoSize) and (ARow>=0) and (ARow<FRowCount) and
      (not WrappedBefore) and EffectiveCellWordWrap(ACol, ARow) then begin
-    AutoSizeRows(ARow, ARow, FAutoSizePrecise);
+    AutoSizeRows(ARow, ARow);
     UpdateSize;
   end;
 end;
@@ -4899,7 +4908,7 @@ begin
   //    holds its pre-edit text - step 2 accounts for the live editor text).
   //    Use the grid's sticky AutoSize mode so a fast grid stays fast; step 2
   //    measures the edited cell precisely regardless, so the editor aligns.
-  AutoSizeRows(FromRow,ToRow,FAutoSizePrecise);
+  AutoSizeRows(FromRow,ToRow);
 
   // 2. Height the uncommitted editor text needs, measured identically, then
   //    converted to a whole-pixel row height with Ceil (never Trunc - flooring
@@ -4960,10 +4969,11 @@ begin
       // The new content may need more (or fewer) lines, so re-fit the row
       // height. A merged cell spans several rows - autosize that whole range.
       var MergedCell: TMergedCell;
-      if IsMergedCell(ACol,ARow,MergedCell) then
-        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, FAutoSizePrecise)
-      else
-        AutoSizeRows(ARow, ARow, FAutoSizePrecise);
+      if IsMergedCell(ACol,ARow,MergedCell) then begin
+        AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1)
+      end else begin
+        AutoSizeRows(ARow, ARow);
+      end;
       UpdateSize; // total height changed -> refresh scrollbar range
     end;
 end;
@@ -6029,7 +6039,7 @@ begin
     // Skipped during a bulk rebuild (it applies wrap to every column in a loop
     // and sizes once at the end).
     if not FSuppressAutoSize then begin
-      AutoSizeRows(FAutoSizePrecise);
+      AutoSizeRows;
       UpdateSize;
     end;
     Invalidate;
@@ -6048,7 +6058,7 @@ begin
     // Row heights depend on wrap, so re-fit them now. Skipped during a
     // bulk rebuild, which does its own single sizing pass at the end.
     if not FSuppressAutoSize and Value then begin
-      AutoSizeRows(FAutoSizePrecise);
+      AutoSizeRows;
       UpdateSize;
     end;
     Invalidate;
@@ -6061,7 +6071,7 @@ begin
     FConservativeWrap:=Value;
     // Only matters while wrapping; re-fit so the new policy takes effect.
     if not FSuppressAutoSize and GridHaveWordWrap then begin
-      AutoSize(FAutoSizePrecise);
+      AutoSize;
     end;
     Invalidate;
   end;
@@ -6738,7 +6748,7 @@ begin
     // Rows just got default heights from UpdateRowCount; if the grid wraps,
     // fit them to content now.
     if GridHaveWordWrap then begin
-      AutoSizeRows(FAutoSizePrecise);
+      AutoSizeRows;
       UpdateSize;
     end;
   finally
@@ -8329,10 +8339,11 @@ begin
   // immediately.
   if Result and (ARow>=0) and (ARow<FRowCount) then begin
     var MergedCell: TMergedCell;
-    if IsMergedCell(ACol,ARow,MergedCell) then
-      AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1, FAutoSizePrecise)
-    else
-      AutoSizeRows(ARow, ARow, FAutoSizePrecise);
+    if IsMergedCell(ACol,ARow,MergedCell) then begin
+      AutoSizeRows(MergedCell.Row, MergedCell.Row+MergedCell.RowSpan-1)
+    end else begin
+      AutoSizeRows(ARow, ARow);
+    end;
     UpdateSize;
   end;
 
