@@ -3533,6 +3533,16 @@ begin
             for var Word in Words do
               if Word<>'' then
                 MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+
+            if ConservativeWrap then begin
+              // Try to keep Cell Width/Height as 5/1
+              var TH:=Canvas.TextHeight('A');
+              var D:=DataFullW/MaxWordWidth*TH;
+              if D*5>MaxWordWidth then begin
+                MaxWordWidth:=Min(Sqrt(5*MaxWordWidth*D),DataFullW);
+              end;
+            end;
+
             DataW:=Max(DataW,MaxWordWidth/ColSpan-(ColSpan-1)*CellDelimterWidth/2);
           end else begin
             // Already small enough: keep it on one line.
