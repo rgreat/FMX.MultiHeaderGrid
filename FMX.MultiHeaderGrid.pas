@@ -299,8 +299,9 @@ type
   private
     type
       TRowData = packed record
-        Top    : integer;
-        Height : Word;
+        Top       : integer;
+        Height    : Word;
+        AutoSized : boolean;
       end;
 
     var
@@ -698,8 +699,8 @@ type
     procedure ClearMergedCells;
 
     procedure AutoSizeCols(ForcePrecise: boolean = False);
-    procedure AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1); overload;
-    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1); overload;
+    procedure AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False); overload;
+    procedure AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False); overload;
     procedure AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
     // Sizes each header level's height to fit its (optionally wrapped or
     // multi-line) captions. Shared by all grid descendants.
@@ -2329,6 +2330,10 @@ begin
       Canvas.Fill.Kind:=TBrushKind.Solid;
       Canvas.Fill.Color:=FBackgroundColor;
 
+      if WordWrap then begin
+        AutoSizeVisibleRows;
+      end;
+
       // Clear the background
       Canvas.FillRect(LocalRect, 0, 0, AllCorners, 1, Canvas.Fill);
 
@@ -3870,20 +3875,24 @@ begin
     AutoSizeHeaders;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
+procedure TMultiHeaderGrid.AutoSizeRows(ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False);
 begin
-  AutoSizeRows(0, FRowCount-1, ForcePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
+  AutoSizeRows(0, FRowCount-1, ForcePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex, TryOptimise);
 end;
 
 type
   TSizeComputeMode = (cmFast,cmSlow,cmFull);
 
-procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
+procedure TMultiHeaderGrid.AutoSizeRows(FromRow, ToRow: integer; ForcePrecise: boolean = False; FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1; TryOptimise: boolean = False);
 begin
   // If a column rebuild is pending (deferred), do it first so we auto-size the
   // up-to-date layout rather than the stale one. No-op on grids without
   // deferred layout.
   EnsureLayout;
+
+  if (FResizeStartColumnIndex<>-1) or (FResizeEndColumnIndex<>-1) then begin
+    TryOptimise:=False;
+  end;
 
   // Suppress on-demand fetching for the measurement sweep below: it iterates
   // every row, which on the DB grid's fallback would force-fetch / mutate
@@ -3916,9 +3925,12 @@ begin
 
     Canvas.Font.Assign(FCellFont);
     var TH:=Canvas.TextHeight('A');
+    var Changed:=False;
     for var Row:=FromRow to FRowCount-1 do begin
       if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
          ((ToRow>=0) and (Row>ToRow)) then Break;
+
+      if TryOptimise and FRowData[Row].AutoSized then Continue;
 
       var MaxHeight:=TH;
 
@@ -3983,15 +3995,25 @@ begin
         // also Ceils. Flooring here while the editor Ceils made each edit re-floor
         // the row a sub-pixel shorter than the editor had grown it, so repeated
         // edits slowly shrank the row. Rounding both the same way removes that.
-        FRowData[Row].Height:=Ceil(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+        var NewSize:=Ceil(MaxHeight+CellPaddingHeight+CellDelimterHeight/2);
+        if FRowData[Row].Height<>NewSize then begin
+          FRowData[Row].Height:=NewSize;
+          Changed:=True;
+        end;
+
         if Row>0 then begin
           FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
         end;
       end;
+      if TryOptimise then begin
+        FRowData[Row].AutoSized:=True;
+      end;
     end;
 
-    for var Row:=1 to Min(FRowCount-1,High(FRowData)) do begin
-      FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
+    if Changed then begin
+      for var Row:=1 to Min(FRowCount-1,High(FRowData)) do begin
+        FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
+      end;
     end;
   finally
     FInLayout:=False;
@@ -4007,7 +4029,7 @@ begin
   if First<0 then First:=0;
   var Last:=RowAtHeightCoord(ViewBottom);
   if Last<First then Last:=FRowCount-1; // viewport past the last row
-  AutoSizeRows(First, Last, FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex);
+  AutoSizeRows(First, Last, FAutoSizePrecise, FResizeStartColumnIndex, FResizeEndColumnIndex, True);
 
   UpdateSize;
 end;
@@ -4478,6 +4500,10 @@ end;
 
 procedure TMultiHeaderGrid.DoSetCellText(ACol, ARow: Integer; const Text: string);
 begin
+  if High(FRowData)>=ARow then begin
+    FRowData[ARow].AutoSized:=False;
+  end;
+
   if Assigned(FOnSetCellText) then
     FOnSetCellText(Self, ACol, ARow, Text);
 end;
@@ -4490,6 +4516,10 @@ end;
 
 procedure TMultiHeaderGrid.DoSetCellStyle(ACol, ARow: Integer; const Style: TCellStyle);
 begin
+  if High(FRowData)>=ARow then begin
+    FRowData[ARow].AutoSized:=False;
+  end;
+
   if Assigned(FOnSetCellStyle) then begin
     FOnSetCellStyle(Self, ACol, ARow, Style);
     if Style.WordWrapIsSet and Style.WordWrap then FGridCellsHasWordWrap:=True;
