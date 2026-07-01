@@ -21,3 +21,4 @@ Win32
 /Test/*.exp
 /Test/*.lnk
 /Test/*.pdb
+/Test/MultiHeaderGridTest

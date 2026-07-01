@@ -396,8 +396,8 @@ type
       // follow-up pass reconciles the total against the viewport: leftover
       // horizontal space is handed back to wrapped columns (growing them toward
       // their natural one-line width, so they wrap less), and an overflow shrinks
-      // columns proportionally toward their word-width floor to fit. Off = the
-      // original behaviour (size to word width regardless of available space).
+      // columns proportionally toward their word-width floor to fit. When off,
+      // columns are sized to word width regardless of available space.
       FConservativeWrap: Boolean;
       FHeaderColumns: TMHGHeaderColumns;
       FRebuildingHeaderColumns: Boolean;
@@ -1048,23 +1048,14 @@ type
       // Grid row of the pending insert record during dsInsert (VCL buffer-style
       // phantom row); -1 otherwise.
       FInsertRowIndex: Integer;
-      // --- On-demand rows: bookmark index + live fetch -------------------
-      // For a non-sequenced cursor (FireDAC on-demand, unidirectional, provider
-      // cursors) RecNo/RecordCount are not a reliable absolute index. The grid
-      // then runs FALLBACK mode: rows are located by Bookmark via a per-row
-      // index (FRowBmList) that is GROWN INCREMENTALLY by live fetching - the
-      // cursor is stepped with Next (bounded by Eof) only as far as the grid
-      // actually needs, never an up-front full scan and never reading
-      // RecordCount. Sequenced cursors keep the native RecNo/RecordCount path
-      // unchanged. Decision is cached per open in FRecNoChecked.
-      FUseBookmarkFallback: Boolean;        // True => fallback (bookmark) mode active
-      FRecNoChecked: Boolean;               // fallback decision made for this open
+      // --- On-demand rows: native RecNo/RecordCount + live growth --------
+      // The grid always uses the dataset's native RecNo/RecordCount. When the
+      // dataset fetches on demand (FireDAC FetchOptions.Mode is fmManual/
+      // fmOnDemand), RecordCount only counts rows fetched so far, so the cursor
+      // is stepped with Next (bounded by Eof) as the grid navigates/scrolls to
+      // materialize more rows. Fully-materialized cursors need no growth.
       FFetchesOnDemand: Boolean;            // cached: dataset fetches rows lazily (FetchOptions.Mode)
-      FRowBmList: TList<TBookmark>;          // ARow -> bookmark, grown on demand
-      FAllRowsFetched: Boolean;             // True once a live fetch reached Eof
-      FLiveFetching: Boolean;               // re-entrancy guard: cursor stepping in progress
       FInUpdateRowCount: Boolean;           // re-entrancy guard for UpdateRowCount
-      FFetchingForViewport: Boolean;        // re-entrancy guard for scroll-driven growth
       // Re-entrancy guard for native-path live growth (stepping the cursor with
       // Next fires DataSetScrolled/-Changed -> UpdateRowCount).
       FNativeFetching: Boolean;
@@ -1154,38 +1145,21 @@ type
     // the grid has none AND this is a genuinely new source/table (a signature
     // we have not auto-created for before), then rebuilds.
     procedure HandleActiveChanged;
-    // --- On-demand row helpers (bookmark index + live fetch) -----------
-    // Decides once (cached) whether the native RecNo/RecordCount path is usable.
-    // Uses TDataSet.IsSequenced (the VCL TCustomDBGrid test) plus guards.
-    function  DataSetSupportsRecNo(DS: TDataSet): Boolean;
+    // --- On-demand row helpers (native RecNo + live growth) ------------
     // True when the dataset fetches rows on demand, so RecordCount only counts
     // rows fetched so far and the true end is unknown until stepped. Detected via
-    // the FireDAC FetchOptions.Mode RTTI property (IsSequenced is unreliable - it
-    // is True even under on-demand fetch). False when not detectable.
+    // the FireDAC FetchOptions.Mode RTTI property. False when not detectable.
     function  DataSetFetchesOnDemand(DS: TDataSet): Boolean;
-    // True when the End key must discover the end by fetching on demand (the
-    // bookmark/live-fetch path before Eof, or an on-demand native cursor not yet
-    // fully fetched). False when the end is already known, so End jumps to it.
+    // True when the End key must discover the end by fetching on demand (an
+    // on-demand cursor not yet fully fetched). False when the end is already
+    // known, so End jumps to it.
     function  EndIsOnDemand: Boolean;
     // Runs the cancellable, repainting page-down loop driving the dataset to Eof
     // (or until the user cancels). Invoked from KeyDown on a real End press.
     procedure RunEndFetch;
-    // Effective row count: RecordCount natively, FRowBmList.Count in fallback.
-    function  EffectiveRowCount: Integer;
-    // 0-based index of the current record: RecNo-1 natively, matching bookmark
-    // slot in fallback. -1 if unknown.
+    // 0-based index of the current record: RecNo-1, or the pending insert row
+    // during dsInsert. -1 if unknown.
     function  CurrentRowIndex: Integer;
-    // Positions DS on grid row ARow: RecNo natively; in fallback, fetches up to
-    // ARow if needed then jumps to its bookmark. False if not locatable.
-    function  LocateRow(DS: TDataSet; ARow: Integer): Boolean;
-    // Live-fetch primitives (fallback only).
-    procedure ClearRowBookmarks;
-    procedure FetchRowsUpTo(ATargetRow: Integer); // step Next, bounded by Eof
-    procedure ResetLiveFetch;                      // clear + fetch initial view
-    procedure EnsureRowsFetched(ARow: Integer);    // grow when ARow reaches end
-    // Count of rows materialized so far (FRowBmList.Count in fallback, else
-    // RecordCount). Used to bound AutoSizeCols to fetched rows (C-fit-fetched).
-    function  FetchedRowCount: Integer;
     // Native-path live growth: step the cursor forward (bounded by Eof) until
     // grid row ATargetRow is materialized, or to Eof when ATargetRow < 0, then
     // adopt the grown RecordCount. Shared by EnsureRowAvailable /
@@ -3456,7 +3430,7 @@ begin
   var UseFastMode:=not FAutoSizePrecise and (FRowCount*FColCount>10000);
 
   // Rows to scan for content width: all rows normally, or only fetched rows on
-  // the DB grid's on-demand fallback (C-fit-fetched).
+  // an on-demand cursor (C-fit-fetched).
   var ScanRows:=ColScanRowLimit;
 
   // Per-column data captured for the conservative-wrap reconciliation pass
@@ -3980,8 +3954,8 @@ begin
   end;
 
   // Suppress on-demand fetching for the measurement sweep below: it iterates
-  // every row, which on the DB grid's fallback would force-fetch / mutate
-  // FRowData mid-loop. Fetching is driven by paint/scroll, not layout.
+  // every row, which on an on-demand cursor would force-fetch / mutate FRowData
+  // mid-loop. Fetching is driven by paint/scroll, not layout.
   FInLayout:=True;
   try
     Canvas.Font.Assign(FCellFont);
@@ -6563,13 +6537,10 @@ begin
   FCellTexts:=TRowsData.Create(FRowCacheSize);
   FDataLink:=TMHGDataLink.Create(Self);
   FColumns:=TMHGColumns.Create(Self);
-  FRowBmList:=TList<TBookmark>.Create;
 end;
 
 destructor TMultiHeaderDBGrid.Destroy;
 begin
-  ClearRowBookmarks;
-  FRowBmList.Free;
   FDataLink.Free;
   FCellTexts.Free;
   FColumns.Free;
@@ -6701,9 +6672,8 @@ begin
   end;
 
   // The cached row text is now stale - drop it so that
-  // DoGetCellText re-reads the current field values.
-  // The style cache (DoSetCellStyle) for this row is lost too -
-  // see the chat notes about possible follow-up improvements.
+  // DoGetCellText re-reads the current field values. The style cache for this
+  // row is dropped with it.
   FCellTexts.Remove(ARow);
   Invalidate;
 end;
@@ -6847,10 +6817,6 @@ end;
 
 function TMultiHeaderDBGrid.GetRowData(ARow: Integer): TDBRowData;
 begin
-  // Live-fetch fallback: reaching the last fetched row pulls the next packet(s)
-  // and grows RowCount. No-op on the native path or once all rows are in.
-  EnsureRowsFetched(ARow);
-
   if FCellTexts.TryGetValue(ARow,Result) then begin
     // Result is a copy of the entry (Cells/Styles are refcounted
     // dynamic arrays - the data is shared with the dictionary entry,
@@ -6869,8 +6835,9 @@ begin
 
   if ARow=CurrentRowIndex then begin
     // Current record buffer (also the pending insert row).
-    for var i:=0 to High(Fields) do
+    for var i:=0 to High(Fields) do begin
       Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
+    end;
   end else if (DS.State=dsInsert) and (FInsertRowIndex>=0) then begin
     // VCL buffer model: read the posted record for this grid row via the
     // DataLink's active buffer, which already accounts for the phantom insert
@@ -6886,15 +6853,17 @@ begin
       finally
         FDataLink.ActiveRecord:=Old;
       end;
+    end else begin
+      Exit;
     end;
   end else begin
     DS.DisableControls;
     try
       var Bookmark:=DS.Bookmark;
       try
-        if LocateRow(DS,ARow) then
-          for var i:=0 to High(Fields) do
-            Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
+        DS.RecNo:=ARow+1;
+        for var i:=0 to High(Fields) do
+          Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
       finally
         if DS.BookmarkValid(Bookmark) then
           DS.Bookmark:=Bookmark;
@@ -6905,7 +6874,8 @@ begin
   end;
 
   Result.LastUsage:=Now;
-  FCellTexts.Add(ARow,Result);
+
+  FCellTexts.AddOrSetValue(ARow,Result);
 
   // Result is an independent copy (with its own references to
   // Cells/Styles), so CleanUpCache can safely remove the entry from
@@ -7145,18 +7115,17 @@ end;
 
 procedure TMultiHeaderDBGrid.HandleActiveChanged;
 begin
-  // A close or (re)open invalidates the probe decision and the bookmark index.
-  FRecNoChecked:=False;
-  FUseBookmarkFallback:=False;
+  // A close or (re)open invalidates cached on-demand state.
   FFetchesOnDemand:=False;
   FNativeAllFetched:=False;
-  ClearRowBookmarks;
 
   if not ((DataSet<>nil) and DataSet.Active) then begin
     // Closed: keep current columns; just rebuild (shows placeholder if empty).
     ResetTable;
     Exit;
   end;
+
+  FFetchesOnDemand:=DataSetFetchesOnDemand(DataSet); // probe once per open
 
   var Sig:=DatasetSignature;
   // Auto-create columns only when there are none AND this is a source/table we
@@ -7204,38 +7173,6 @@ begin
   end;
 end;
 
-function TMultiHeaderDBGrid.DataSetSupportsRecNo(DS: TDataSet): Boolean;
-// Decides once (cached in FRecNoChecked) whether the native RecNo/RecordCount
-// path is usable. Primary signal is TDataSet.IsSequenced - the exact test
-// TCustomDBGrid uses to choose between a proportional and an indicator
-// scrollbar. A sequenced cursor has a meaningful 1..RecordCount numbering;
-// a non-sequenced one (FireDAC on-demand, unidirectional, provider cursors)
-// does not and is routed to the bookmark/live-fetch fallback.
-begin
-  if FRecNoChecked then Exit(not FUseBookmarkFallback);
-
-  FRecNoChecked:=True;
-  FUseBookmarkFallback:=False;
-  FFetchesOnDemand:=DataSetFetchesOnDemand(DS); // probe once; cheap to read thereafter
-
-  if (DS=nil) or (not DS.Active) then Exit(True);
-
-  try
-    if DS.IsUnidirectional then
-      FUseBookmarkFallback:=True
-    else if not DS.IsSequenced then
-      FUseBookmarkFallback:=True
-    else if DS.RecordCount<0 then
-      FUseBookmarkFallback:=True
-    else if (not DS.IsEmpty) and (DS.RecNo<=0) then
-      FUseBookmarkFallback:=True;
-  except
-    FUseBookmarkFallback:=True;
-  end;
-
-  Result:=not FUseBookmarkFallback;
-end;
-
 function TMultiHeaderDBGrid.DataSetFetchesOnDemand(DS: TDataSet): Boolean;
 // FireDAC datasets expose FetchOptions.Mode (TFDFetchMode = fmManual, fmOnDemand,
 // fmAll, fmExactRecsMax). fmManual/fmOnDemand fetch rows lazily, so RecordCount is
@@ -7271,118 +7208,6 @@ begin
   end;
 end;
 
-procedure TMultiHeaderDBGrid.ClearRowBookmarks;
-begin
-  if FRowBmList<>nil then FRowBmList.Clear; // TBookmark is managed (TBytes)
-  FAllRowsFetched:=False;
-end;
-
-procedure TMultiHeaderDBGrid.FetchRowsUpTo(ATargetRow: Integer);
-// Fallback only. Grows FRowBmList by stepping Next, one bookmark per row, until
-// index ATargetRow exists or Eof. Strictly bounded by Eof - cannot loop forever
-// even if a fetch packet is smaller than the jump. RecordCount is never read.
-// ATargetRow<0 means "one more chunk" (for scroll growth). Restores the user's
-// record afterwards.
-begin
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then Exit;
-  if FAllRowsFetched then Exit;
-  if (ATargetRow>=0) and (ATargetRow<FRowBmList.Count) then Exit;
-
-  DS.DisableControls;
-  FLiveFetching:=True;
-  try
-    var SavedBookmark: TBookmark := nil;
-    if not DS.IsEmpty then SavedBookmark:=DS.Bookmark;
-    try
-      if FRowBmList.Count=0 then begin
-        if DS.IsEmpty then begin FAllRowsFetched:=True; Exit; end;
-        DS.First;
-        FRowBmList.Add(DS.Bookmark);
-      end else begin
-        var LastBM:=FRowBmList[FRowBmList.Count-1];
-        if DS.BookmarkValid(LastBM) then DS.Bookmark:=LastBM;
-      end;
-
-      while (not DS.Eof) and
-            ((ATargetRow<0) or (FRowBmList.Count<=ATargetRow)) do begin
-        DS.Next;
-        if DS.Eof then Break;
-        FRowBmList.Add(DS.Bookmark);
-        if (ATargetRow<0) and (FRowBmList.Count mod 64 = 0) then Break;
-      end;
-
-      if DS.Eof then FAllRowsFetched:=True;
-    finally
-      if (SavedBookmark<>nil) and DS.BookmarkValid(SavedBookmark) then
-        DS.Bookmark:=SavedBookmark;
-    end;
-  finally
-    FLiveFetching:=False;
-    DS.EnableControls;
-  end;
-end;
-
-procedure TMultiHeaderDBGrid.ResetLiveFetch;
-// Fallback only. Clears the index and fetches the rows the initial view needs,
-// so the grid is populated and fetch logic is live from the first sizing.
-begin
-  ClearRowBookmarks;
-
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then Exit;
-
-  var RowH:=DefaultRowHeight; if RowH<=0 then RowH:=20;
-  var Visible:=(ViewCellsHeight div RowH)+2;
-  if Visible<16 then Visible:=16;
-
-  FetchRowsUpTo(Visible-1);
-end;
-
-procedure TMultiHeaderDBGrid.EnsureRowsFetched(ARow: Integer);
-// Growth trigger from row-access (paint) and scroll. If ARow reaches the last
-// fetched row and more may exist, pulls the next packet(s) and grows RowCount.
-// The RowCount resize is deferred (ForceQueue) when called during paint, since
-// GetRowData runs mid-paint and a synchronous resize re-enters layout.
-begin
-  if not FUseBookmarkFallback then Exit;
-  if FAllRowsFetched then Exit;
-  if InLayout then Exit;                 // never fetch during the measurement sweep
-  if ARow<FRowBmList.Count-1 then Exit;  // still inside fetched range
-
-  var Before:=FRowBmList.Count;
-  FetchRowsUpTo(ARow+1);
-
-  if (FRowBmList.Count<>Before) and (RowCount<>FRowBmList.Count) then
-    TThread.ForceQueue(nil,
-      procedure
-      begin
-        if FUseBookmarkFallback and (RowCount<>FRowBmList.Count) then
-          RowCount:=FRowBmList.Count;
-      end);
-end;
-
-function TMultiHeaderDBGrid.FetchedRowCount: Integer;
-// Rows materialized so far - used to bound AutoSizeCols to fetched rows
-// (C-fit-fetched). On the native path this is the full RecordCount.
-begin
-  if FUseBookmarkFallback then
-    Result:=FRowBmList.Count
-  else
-    Result:=RowCount;
-end;
-
-function TMultiHeaderDBGrid.EffectiveRowCount: Integer;
-begin
-  if FUseBookmarkFallback then
-    Result:=FRowBmList.Count
-  else begin
-    var DS:=DataSet;
-    if (DS=nil) or (not DS.Active) or (DS.RecordCount<0) then Result:=0
-    else Result:=DS.RecordCount;
-  end;
-end;
-
 function TMultiHeaderDBGrid.CurrentRowIndex: Integer;
 begin
   Result:=-1;
@@ -7392,42 +7217,12 @@ begin
   if (DS.State=dsInsert) and (FInsertRowIndex>=0) then Exit(FInsertRowIndex);
   if DS.IsEmpty then Exit;
 
-  if FUseBookmarkFallback then begin
-    var Cur:=DS.Bookmark;
-    for var i:=0 to FRowBmList.Count-1 do
-      if DS.CompareBookmarks(FRowBmList[i],Cur)=0 then Exit(i);
-    Exit;
-  end;
-
   if DS.RecNo>0 then Result:=DS.RecNo-1;
-end;
-
-function TMultiHeaderDBGrid.LocateRow(DS: TDataSet; ARow: Integer): Boolean;
-begin
-  Result:=False;
-  if (DS=nil) or (not DS.Active) then Exit;
-  if ARow<0 then Exit;
-
-  if FUseBookmarkFallback then begin
-    if ARow>=FRowBmList.Count then FetchRowsUpTo(ARow);
-    if ARow>=FRowBmList.Count then Exit;
-    var BM:=FRowBmList[ARow];
-    if not DS.BookmarkValid(BM) then Exit;
-    DS.Bookmark:=BM;
-    Result:=True;
-  end else begin
-    try
-      DS.RecNo:=ARow+1;
-      Result:=True;
-    except
-      Result:=False;
-    end;
-  end;
 end;
 
 procedure TMultiHeaderDBGrid.UpdateRowCount;
 begin
-  if FLiveFetching or FNativeFetching then Exit;     // ignore callbacks during cursor stepping
+  if FNativeFetching then Exit;     // ignore callbacks during cursor stepping
   if FInUpdateRowCount then Exit;  // re-entrancy guard (nested DataSetChanged)
   FInUpdateRowCount:=True;
   try
@@ -7446,23 +7241,16 @@ begin
     if FDataLink.BufferCount<>VisRows then FDataLink.BufferCount:=VisRows;
 
     var Inserting:=(DS.State=dsInsert);
-    if not Inserting then FInsertRowIndex:=-1;
+    if not Inserting and (FInsertRowIndex>=0) then FInsertRowIndex:=-1;
 
-    if DataSetSupportsRecNo(DS) then begin
-      // Native path. VCL buffer model: during dsInsert the pending record is an
-      // extra visible row; grow RowCount by one (through the setter so FRowData
-      // stays consistent). FInsertRowIndex holds its grid position.
-      if Inserting then begin
-        if FInsertRowIndex<0 then FInsertRowIndex:=DS.RecordCount;
-        RowCount:=DS.RecordCount+1;
-      end else
-        RowCount:=DS.RecordCount;
-    end else begin
-      // Fallback: live fetch. Reset the index and pull the initial view; the
-      // count then grows on demand as the user scrolls. RecordCount unused.
-      ResetLiveFetch;
-      RowCount:=FRowBmList.Count;
-    end;
+    // Native path. VCL buffer model: during dsInsert the pending record is an
+    // extra visible row; grow RowCount by one (through the setter so FRowData
+    // stays consistent). FInsertRowIndex holds its grid position.
+    if Inserting then begin
+      if FInsertRowIndex<0 then FInsertRowIndex:=DS.RecordCount;
+      RowCount:=DS.RecordCount+1;
+    end else
+      RowCount:=DS.RecordCount;
 
     SyncSelectedRowFromDataSet;
     Invalidate;
@@ -7473,7 +7261,7 @@ end;
 
 procedure TMultiHeaderDBGrid.SyncSelectedRowFromDataSet;
 begin
-  if FLiveFetching or FNativeFetching then Exit;
+  if FNativeFetching then Exit;
 
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
@@ -7494,7 +7282,7 @@ end;
 
 procedure TMultiHeaderDBGrid.InvalidateCurrentRow;
 begin
-  if FLiveFetching or FNativeFetching then Exit;
+  if FNativeFetching then Exit;
 
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) or DS.IsEmpty then Exit;
@@ -7541,7 +7329,7 @@ begin
     // RowCount collapses on the DataSetChanged that follows the post.
   end;
 
-  if (Row<0) or (Row>=EffectiveRowCount) then Exit;
+  if (Row<0) or (Row>=RowCount) then Exit;
   if CurrentRowIndex=Row then Exit;
 
   FUpdatingRow:=True;
@@ -7549,7 +7337,7 @@ begin
     var RecRow:=Row;
     if (DS.State=dsInsert) and (FInsertRowIndex>=0) and (Row>FInsertRowIndex) then
       RecRow:=Row-1;
-    LocateRow(DS,RecRow); // RecNo (native) or Bookmark (fallback)
+    try DS.RecNo:=RecRow+1; except end;
   finally
     FUpdatingRow:=False;
   end;
@@ -7572,14 +7360,9 @@ begin
   var LastVisible:=RowAtHeightCoord(ViewBottom);
   if LastVisible<0 then LastVisible:=RowCount-1;
 
-  if FUseBookmarkFallback then begin
-    if FAllRowsFetched then Exit;
-    EnsureRowsFetched(LastVisible);
-  end else begin
-    // Native path with a partial RecordCount (on-demand cursor): pull the next
-    // packet(s) when the last visible row reaches the known count.
-    if LastVisible>=RowCount-1 then EnsureRowAvailable(LastVisible+1);
-  end;
+  // On-demand cursor with a partial RecordCount: pull the next packet(s) when
+  // the last visible row reaches the known count.
+  if LastVisible>=RowCount-1 then EnsureRowAvailable(LastVisible+1);
 end;
 
 procedure TMultiHeaderDBGrid.GrowNativeTo(ATargetRow: Integer);
@@ -7631,14 +7414,10 @@ end;
 
 function TMultiHeaderDBGrid.EndIsOnDemand: Boolean;
 // End must page on demand (the cancellable, repainting loop) whenever the true
-// end is not yet known: the bookmark-fallback path before Eof, or a native cursor
-// that fetches lazily (FetchOptions.Mode is fmManual/fmOnDemand) and is not yet
-// fully fetched. A fully-materialized cursor returns False, so End jumps straight
-// to the last row. IsSequenced is deliberately not used - it is True even
-// on-demand.
+// end is not yet known: a cursor that fetches lazily (FetchOptions.Mode is
+// fmManual/fmOnDemand) and is not yet fully fetched. A fully-materialized cursor
+// returns False, so End jumps straight to the last row.
 begin
-  if FUseBookmarkFallback then
-    Exit(not FAllRowsFetched);
   Result:=FFetchesOnDemand and (not FNativeAllFetched);
 end;
 
@@ -7706,22 +7485,14 @@ begin
 end;
 
 procedure TMultiHeaderDBGrid.EnsureRowAvailable(ARow: Integer);
-// Ensures grid row ARow is reachable when navigating down.
-//   Fallback mode: fetch up to ARow via bookmarks (bounded by Eof).
-//   Native mode: step the cursor toward ARow (GrowNativeTo) - some sequenced
-//     FireDAC cursors report only the fetched RecordCount until rows are pulled.
-// Synchronous - KeyDown is not a paint, so resizing here is safe.
+// Ensures grid row ARow is reachable when navigating down: step the cursor toward
+// ARow (GrowNativeTo) - an on-demand FireDAC cursor reports only the fetched
+// RecordCount until rows are pulled. Synchronous - KeyDown is not a paint, so
+// resizing here is safe.
 begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
-
-  if FUseBookmarkFallback then begin
-    if FAllRowsFetched then Exit;
-    if ARow<FRowBmList.Count then Exit; // already materialized
-    FetchRowsUpTo(ARow);
-    if RowCount<>FRowBmList.Count then RowCount:=FRowBmList.Count;
-  end else
-    GrowNativeTo(ARow);
+  GrowNativeTo(ARow);
 end;
 
 procedure TMultiHeaderDBGrid.EnsureRowsForViewport(ATargetTop: Integer);
@@ -7729,50 +7500,23 @@ procedure TMultiHeaderDBGrid.EnsureRowsForViewport(ATargetTop: Integer);
 // fetched rows and more may exist, pull packet(s) and grow RowCount
 // synchronously (scroll event, not paint) so the clamp sees the new extent.
 begin
-  if FAllRowsFetched then Exit;
+  if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
   if Length(FRowData)=0 then Exit;
-  if FFetchingForViewport then Exit;
 
-  if not FUseBookmarkFallback then begin
-    // Native path with partial RecordCount: if the requested top reaches the
-    // last known row, pull more so the clamp in SetViewTop can move further.
-    if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
-    var LastTop:=FRowData[High(FRowData)].Top;
-    if ATargetTop+ViewCellsHeight>=LastTop then begin
-      var TargetRow:=RowCount-1+ Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
-      GrowNativeTo(TargetRow);
-    end;
-    Exit;
-  end;
-
-  FFetchingForViewport:=True;
-  try
-    // Fetch until the requested top is covered, PLUS one viewport of lookahead,
-    // so the proportional scrollbar's Max stays a screen ahead of the thumb and
-    // a continuous drag toward the end keeps extending smoothly instead of
-    // stalling one chunk at a time.
-    var Lookahead:=ViewCellsHeight;
-    var Guard:=0;
-    while (not FAllRowsFetched) and
-          (Length(FRowData)>0) and
-          (ATargetTop+Lookahead>=FRowData[High(FRowData)].Top) do begin
-      var Before:=FRowBmList.Count;
-      FetchRowsUpTo(-1);
-      if FRowBmList.Count=Before then Break;
-      if RowCount<>FRowBmList.Count then RowCount:=FRowBmList.Count;
-      Inc(Guard);
-      if Guard>100000 then Break;
-    end;
-  finally
-    FFetchingForViewport:=False;
+  // If the requested top reaches the last known row, pull more so the clamp in
+  // SetViewTop can move further.
+  var LastTop:=FRowData[High(FRowData)].Top;
+  if ATargetTop+ViewCellsHeight>=LastTop then begin
+    var TargetRow:=RowCount-1+Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
+    GrowNativeTo(TargetRow);
   end;
 end;
 
 function TMultiHeaderDBGrid.ColScanRowLimit: Integer;
 begin
-  // Bound the column-width scan to rows fetched so far (C-fit-fetched). On the
-  // native path FetchedRowCount = RowCount, so behaviour is unchanged.
-  Result:=Min(FRowCount, FetchedRowCount);
+  // Bound the column-width scan to rows fetched so far (C-fit-fetched) -
+  // RowCount is the fetched RecordCount.
+  Result:=Min(FRowCount, RowCount);
   if Result<0 then Result:=0;
 end;
 
@@ -8314,7 +8058,7 @@ begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
 
-  var AtLast:=(EffectiveRowCount>0) and (Row>=EffectiveRowCount-1);
+  var AtLast:=(RowCount>0) and (Row>=RowCount-1);
 
   // An unmodified, freshly-inserted record sitting at the end: Down keeps the
   // caret there instead of appending another empty record.
@@ -8343,7 +8087,7 @@ begin
   if not DoInsertRow(ARow) then Exit;
 
   if FEditing then CancelEditing;
-  LocateRow(DS, Max(0, ARow));
+  try DS.RecNo:=Max(0, ARow)+1; except end;
   FInsertRowIndex:=Max(0, ARow); // phantom row shown before the current row
   DS.Insert;
 end;
@@ -8380,8 +8124,11 @@ begin
   if FEditing then CancelEditing;
   HideEditor;
 
-  if LocateRow(DS, ARow) then
+  try
+    DS.RecNo:=ARow+1;
     DS.Delete;
+  except
+  end;
 end;
 
 function TMultiHeaderDBGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
@@ -8757,8 +8504,7 @@ begin
     end;
     Result:=True;
   except
-    // Conversion/validation failed: keep the old value and stay put. Change to
-    // `raise` to surface the error instead.
+    // Conversion/validation failed: keep the old value and stay put.
     Result:=False;
   end;
 
