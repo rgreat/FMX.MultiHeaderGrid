@@ -290,6 +290,9 @@ type
   TColumnsResizedEvent = procedure(Sender: TObject; StartRow, EndRow: integer) of object;
   TRowResizedEvent = procedure(Sender: TObject; ARow: Integer) of object;
   TGridScrollEvent = procedure(Sender: TObject; Left,Top: Integer) of object;
+  // Fired before a row is inserted/appended/deleted via the keyboard shortcuts
+  // (Insert / Down-on-last-row / Ctrl+Del). Set Allow:=False to veto the change.
+  TRowModifyEvent = procedure(Sender: TObject; ARow: Integer; var Allow: Boolean) of object;
 
   TResizeMode = (rmNone, rmColumn, rmHeaderRow, rmGridRow);
   TResizeQuality = (rqNoChange, rqPrecise, rqFast);
@@ -379,6 +382,9 @@ type
       FOnHeaderResized: TRowResizedEvent;
       FOnRowResized: TRowResizedEvent;
       FOnGridScroll: TGridScrollEvent;
+      FOnInsertRow: TRowModifyEvent;
+      FOnAppendRow: TRowModifyEvent;
+      FOnDeleteRow: TRowModifyEvent;
       FLastClickIsOnCell: boolean;
       FDrawRect : TRectF;
 
@@ -531,7 +537,33 @@ type
     // request room for fixed-size controls (combo/date/time/datetime).
     function  EditorMinColWidth(ACol, ARow: Integer): single; virtual;
     procedure SetReadOnly(const Value: Boolean);
+    // CanEditCell: an inplace editor may OPEN for this cell (by type/bounds).
+    // It is independent of ReadOnly so a read-only grid still opens the editor
+    // for selecting/copying text. CellIsModifiable gates actual writes: it is
+    // False when ReadOnly (and, in the DB grid, when the dataset can't modify),
+    // and drives the editor's own ReadOnly state plus the row-edit shortcuts.
     function  CanEditCell(ACol, ARow: Integer): Boolean; virtual;
+    function  CellIsModifiable(ACol, ARow: Integer): Boolean; virtual;
+    // Applies CellIsModifiable to the active editor control so a read-only cell
+    // opens an editor that allows selection/copy but not changes.
+    procedure ApplyEditorReadOnly(Ed: TControl; AModifiable: Boolean); virtual;
+    // Keyboard row shortcuts. Insert inserts a blank row before ARow, AppendRow
+    // adds one after the last row (Down on the last row), DeleteRow removes ARow.
+    // All are no-ops when the grid/dataset is not modifiable. The base grid acts
+    // on the string-grid row model; the DB grid overrides to drive the dataset.
+    procedure InsertRow(ARow: Integer); virtual;
+    procedure AppendRow; virtual;
+    // Handles a plain Down keypress. Returns True if it fully handled the key
+    // (so KeyDown does no further navigation). The base appends when Down is
+    // pressed on the last row of a modifiable grid; the DB grid overrides to
+    // follow VCL TDBGrid's NextRow semantics (append at Eof, cancel an
+    // unmodified pending insert). Returns False to fall through to plain move.
+    function  HandleDownKey: Boolean; virtual;
+    procedure DeleteRow(ARow: Integer); virtual;
+    // Fire the veto events; return True when the change may proceed.
+    function  DoInsertRow(ARow: Integer): Boolean;
+    function  DoAppendRow(ARow: Integer): Boolean;
+    function  DoDeleteRow(ARow: Integer): Boolean;
     // Boolean (toggle) cells are not edited through an inplace control: they
     // flip in place on a click / Space / Enter. CellIsToggle reports such a
     // cell; ToggleCell flips its value and persists it. The base grid has no
@@ -878,6 +910,10 @@ type
     property OnHeaderResized: TRowResizedEvent read FOnHeaderResized write FOnHeaderResized;
     property OnRowResized: TRowResizedEvent read FOnRowResized write FOnRowResized;
     property OnGridScroll: TGridScrollEvent read FOnGridScroll write FOnGridScroll;
+    // Fired (with a veto flag) before the keyboard row shortcuts modify rows.
+    property OnInsertRow: TRowModifyEvent read FOnInsertRow write FOnInsertRow;
+    property OnAppendRow: TRowModifyEvent read FOnAppendRow write FOnAppendRow;
+    property OnDeleteRow: TRowModifyEvent read FOnDeleteRow write FOnDeleteRow;
   end;
 
   TMultiHeaderStringGrid = class(TMultiHeaderGrid)
@@ -1005,7 +1041,13 @@ type
       FDataLink: TMHGDataLink;
       FCellTexts: TRowsData;
       FRowCacheSize: integer;
+      // When True (default), DeleteRow shows a confirmation prompt before
+      // deleting - mirrors VCL TDBGrid's dgConfirmDelete option.
+      FConfirmDelete: Boolean;
       FUpdatingRow: Boolean; // guards against recursion when syncing Row <-> DataSet.RecNo
+      // Grid row of the pending insert record during dsInsert (VCL buffer-style
+      // phantom row); -1 otherwise.
+      FInsertRowIndex: Integer;
       // --- On-demand rows: bookmark index + live fetch -------------------
       // For a non-sequenced cursor (FireDAC on-demand, unidirectional, provider
       // cursors) RecNo/RecordCount are not a reliable absolute index. The grid
@@ -1168,6 +1210,17 @@ type
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Single); override;
     // Data-bound inplace editing: a typed editor is chosen per field.
     function CanEditCell(ACol, ARow: Integer): Boolean; override;
+    // A DB cell is modifiable only when not ReadOnly, the dataset CanModify,
+    // and the bound field is not read-only.
+    function CellIsModifiable(ACol, ARow: Integer): Boolean; override;
+    // Row shortcuts driven through the dataset (Insert/Append/Delete).
+    procedure InsertRow(ARow: Integer); override;
+    procedure AppendRow; override;
+    function  HandleDownKey: Boolean; override;
+    procedure DeleteRow(ARow: Integer); override;
+    // Extends the base to cover the typed date/time editors (not TCustomEdit
+    // descendants) so a read-only date/time cell opens for copy without edits.
+    procedure ApplyEditorReadOnly(Ed: TControl; AModifiable: Boolean); override;
     // Boolean fields toggle in place instead of opening an editor.
     function CellIsToggle(ACol, ARow: Integer): Boolean; override;
     function ToggleCell(ACol, ARow: Integer): Boolean; override;
@@ -1204,7 +1257,12 @@ type
     // Field bound to a given grid column (nil if out of range / no dataset).
     function  FieldForCol(ACol: Integer): TField;
     // Editor kind for a field, from DataType / FieldKind / ReadOnly.
-    function  EditorKindForField(Field: TField): TMHGEditorKind;
+    function  EditorKindForField(Field: TField): TMHGEditorKind; overload;
+    // As above but, when AIgnoreReadOnly is True, returns the type-based editor
+    // kind even for a read-only field, so a read-only cell can still open that
+    // editor in read-only mode for selecting/copying text.
+    function  EditorKindForField(Field: TField;
+                                 AIgnoreReadOnly: Boolean): TMHGEditorKind; overload;
     // True for whole-number field types (drives the number editor's integer
     // vs decimal mode).
     function  FieldIsInteger(Field: TField): Boolean;
@@ -1300,6 +1358,9 @@ type
   published
     property DataSource: TDataSource read GetDataSource write SetDataSource;
     property RowCacheSize: integer read FRowCacheSize write SetRowCacheSize default 1000;
+    // When True (default) DeleteRow asks for confirmation before deleting the
+    // record, like VCL TDBGrid's dgConfirmDelete option.
+    property ConfirmDelete: Boolean read FConfirmDelete write FConfirmDelete default True;
     // Default display format for date and time field -> cell-string conversion,
     // used when a column has no explicit DisplayFormat. Datetime fields combine
     // them as DateFormat + ' ' + TimeFormat (or DateFormat alone when the
@@ -1319,7 +1380,7 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects;
+  System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects, FMX.DialogService.Sync;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -2491,7 +2552,12 @@ begin
 
   if TopRow<0 then Exit;
 
-  for j:=TopRow to FRowCount-1 do begin
+  var RowDataLen:=Length(FRowData);
+  if RowDataLen=0 then Exit;
+  if TopRow>=RowDataLen then Exit;
+  var LastRow:=FRowCount-1;
+  if LastRow>RowDataLen-1 then LastRow:=RowDataLen-1;
+  for j:=TopRow to LastRow do begin
     if FRowData[j].Top>ViewBottomCell then Break;
     for i:=0 to FColCount-1 do begin
 
@@ -4326,6 +4392,13 @@ begin
         DY:=-1;
       end;
       vkDown: begin
+        // Let the (overridable) Down handler run first. If it fully handled the
+        // key (e.g. appended a record or cancelled a pending insert), stop;
+        // otherwise fall through to a plain one-row move.
+        if (not (ssCtrl in Shift)) and HandleDownKey then begin
+          Key:=0; KeyChar:=#0;
+          Exit;
+        end;
         DY:=1;
       end;
       vkHome: begin
@@ -4366,16 +4439,41 @@ begin
         Invalidate;
         Exit;
       end;
-      vkC,vkInsert: begin
+      vkC: begin // Ctrl+C / C copies the current cell
         if (Row>=0) and (Col>=0) then begin
           var MergedCell: TMergedCell;
-          if IsMergedCell(Col,Row,MergedCell) then begin
-            CopyTextToClipboard(Cells[MergedCell.Col,MergedCell.Row]);
-          end else begin
+          if IsMergedCell(Col,Row,MergedCell) then
+            CopyTextToClipboard(Cells[MergedCell.Col,MergedCell.Row])
+          else
             CopyTextToClipboard(Cells[Col, Row]);
-          end;
         end;
         Exit;
+      end;
+      vkInsert: begin
+        // Ctrl+Insert keeps the legacy copy shortcut. A plain Insert inserts a
+        // new row before the current one (when the grid is modifiable); if it
+        // isn't, fall back to copy so Insert still does something useful.
+        if (ssCtrl in Shift) or FReadOnly then begin
+          if (Row>=0) and (Col>=0) then begin
+            var MergedCell: TMergedCell;
+            if IsMergedCell(Col,Row,MergedCell) then
+              CopyTextToClipboard(Cells[MergedCell.Col,MergedCell.Row])
+            else
+              CopyTextToClipboard(Cells[Col, Row]);
+          end;
+        end else begin
+          InsertRow(Max(0, Row));
+        end;
+        Key:=0; KeyChar:=#0;
+        Exit;
+      end;
+      vkDelete: begin
+        // Ctrl+Delete deletes the current row (when modifiable).
+        if (ssCtrl in Shift) and (not FReadOnly) and (Row>=0) then begin
+          DeleteRow(Row);
+          Key:=0; KeyChar:=#0;
+          Exit;
+        end;
       end;
     end;
 
@@ -4852,10 +4950,130 @@ end;
 
 function TMultiHeaderGrid.CanEditCell(ACol, ARow: Integer): Boolean;
 begin
-  // Base/string grids are editable unless ReadOnly. Descendants (e.g. the DB
-  // grid) override to apply their own rules.
+  // An editor may open on any in-range cell, even when ReadOnly, so its text
+  // can be selected and copied. Whether edits are accepted is CellIsModifiable.
+  Result:=(ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
+end;
+
+function TMultiHeaderGrid.CellIsModifiable(ACol, ARow: Integer): Boolean;
+begin
+  // Base/string grids accept edits unless ReadOnly. Descendants tighten this
+  // (the DB grid also checks DataSet.CanModify and the field's ReadOnly).
   Result:=(not FReadOnly) and
           (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
+end;
+
+procedure TMultiHeaderGrid.ApplyEditorReadOnly(Ed: TControl; AModifiable: Boolean);
+// Puts the active editor control into read-only mode when the cell is not
+// modifiable, so the user can still select/copy the text but not change it.
+// Covers every control the grids use as an inplace editor.
+begin
+  if Ed is TCustomMemo then
+    TCustomMemo(Ed).ReadOnly:=not AModifiable
+  else if Ed is TCustomEdit then
+    TCustomEdit(Ed).ReadOnly:=not AModifiable
+  else if Ed is TCustomComboBox then
+    TCustomComboBox(Ed).Enabled:=AModifiable;
+end;
+
+function TMultiHeaderGrid.DoInsertRow(ARow: Integer): Boolean;
+begin
+  Result:=True;
+  if Assigned(FOnInsertRow) then FOnInsertRow(Self, ARow, Result);
+end;
+
+function TMultiHeaderGrid.DoAppendRow(ARow: Integer): Boolean;
+begin
+  Result:=True;
+  if Assigned(FOnAppendRow) then FOnAppendRow(Self, ARow, Result);
+end;
+
+function TMultiHeaderGrid.DoDeleteRow(ARow: Integer): Boolean;
+begin
+  Result:=True;
+  if Assigned(FOnDeleteRow) then FOnDeleteRow(Self, ARow, Result);
+end;
+
+procedure TMultiHeaderGrid.InsertRow(ARow: Integer);
+// Base/string-grid model: grow RowCount by one, then shift cell contents down
+// from ARow so the inserted row is blank. SetRowCount keeps FRowData in sync.
+begin
+  if FReadOnly then Exit;
+  if ARow<0 then ARow:=0;
+  if ARow>FRowCount then ARow:=FRowCount;
+  if not DoInsertRow(ARow) then Exit;
+
+  if FEditing then CancelEditing;
+  RowCount:=FRowCount+1;
+  for var R:=FRowCount-1 downto ARow+1 do
+    for var C:=0 to FColCount-1 do begin
+      Cells[C,R]:=Cells[C,R-1];
+      CellStyle[C,R]:=CellStyle[C,R-1];
+    end;
+  for var C:=0 to FColCount-1 do
+    Cells[C,ARow]:='';
+
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), ARow);
+  AutoSizeRows;
+  UpdateSize;
+  ScrollToSelectedCell;
+  DoSelectCell;
+  Invalidate;
+end;
+
+procedure TMultiHeaderGrid.AppendRow;
+// Adds a blank row after the current last row and selects it.
+begin
+  if FReadOnly then Exit;
+  if not DoAppendRow(FRowCount) then Exit;
+
+  if FEditing then CommitEditing;
+  RowCount:=FRowCount+1;
+  for var C:=0 to FColCount-1 do
+    Cells[C,FRowCount-1]:='';
+
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), FRowCount-1);
+  AutoSizeRows;
+  UpdateSize;
+  ScrollToSelectedCell;
+  DoSelectCell;
+  Invalidate;
+end;
+
+function TMultiHeaderGrid.HandleDownKey: Boolean;
+// Base/string grids: pressing Down on the last row appends a blank row.
+begin
+  Result:=False;
+  if FReadOnly then Exit;
+  if (FRowCount>0) and (Row=FRowCount-1) then begin
+    AppendRow;
+    Result:=True;
+  end;
+end;
+
+procedure TMultiHeaderGrid.DeleteRow(ARow: Integer);
+// Removes row ARow, shifting subsequent rows up. The last remaining row is
+// kept (a string grid is never reduced below one row).
+begin
+  if FReadOnly then Exit;
+  if (ARow<0) or (ARow>=FRowCount) then Exit;
+  if FRowCount<=1 then Exit;
+  if not DoDeleteRow(ARow) then Exit;
+
+  if FEditing then CancelEditing;
+  for var R:=ARow to FRowCount-2 do
+    for var C:=0 to FColCount-1 do begin
+      Cells[C,R]:=Cells[C,R+1];
+      CellStyle[C,R]:=CellStyle[C,R+1];
+    end;
+  RowCount:=FRowCount-1;
+
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), Min(ARow,FRowCount-1));
+  AutoSizeRows;
+  UpdateSize;
+  ScrollToSelectedCell;
+  DoSelectCell;
+  Invalidate;
 end;
 
 procedure TMultiHeaderGrid.EnsureEditor(TextAlign: TTextAlign);
@@ -5129,7 +5347,16 @@ begin
   // offers, widen the anchor column so the control isn't clipped.
   WidenColForEditor(ACol, ARow);
 
+  // If this cell can't be modified the editor opens read-only purely so its
+  // text can be selected and copied: never seed it with a typed character
+  // (that would look like an edit), always load the existing value.
+  var Modifiable:=CellIsModifiable(ACol, ARow);
+  if not Modifiable then InitialChar:=#0;
+
   LoadEditorValue(ACol, ARow, InitialChar);
+
+  // Read-only cells: editor allows copy but not changes.
+  ApplyEditorReadOnly(Ed, Modifiable);
 
   // Hide Value in edited cell
   Invalidate;
@@ -5233,7 +5460,9 @@ begin
   // (firing DoSetCellText); the DB grid override assigns the bound field with
   // the correct type. The editor text is not also pushed through Cells[], which
   // would double-write and force an unparsed string into a typed field.
-  CommitEditorValue(Col, Row);
+  // A read-only cell's editor was opened only for copy, so nothing is written.
+  if CellIsModifiable(Col, Row) then
+    CommitEditorValue(Col, Row);
 
   // Editing widened the column to fit the in-progress value. By default the
   // column now returns to its pre-edit width; set KeepEditorWidenedColumn to
@@ -6327,6 +6556,8 @@ begin
   inherited;
 
   FRowCacheSize:=1000;
+  FConfirmDelete:=True;
+  FInsertRowIndex:=-1;
   FDateFormat:='DD.MM.YYYY';
   FTimeFormat:='HH:NN:SS';
   FCellTexts:=TRowsData.Create(FRowCacheSize);
@@ -6637,8 +6868,24 @@ begin
   SetLength(Result.Cells,Length(Fields));
 
   if ARow=CurrentRowIndex then begin
-    for var i:=0 to High(Fields) do begin
+    // Current record buffer (also the pending insert row).
+    for var i:=0 to High(Fields) do
       Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
+  end else if (DS.State=dsInsert) and (FInsertRowIndex>=0) then begin
+    // VCL buffer model: read the posted record for this grid row via the
+    // DataLink's active buffer, which already accounts for the phantom insert
+    // row's slot - no RecNo arithmetic. Map grid row -> buffer index relative
+    // to the pending record's ActiveRecord position.
+    var BufIdx:=FDataLink.ActiveRecord+(ARow-FInsertRowIndex);
+    if (BufIdx>=0) and (BufIdx<FDataLink.BufferCount) then begin
+      var Old:=FDataLink.ActiveRecord;
+      try
+        FDataLink.ActiveRecord:=BufIdx;
+        for var i:=0 to High(Fields) do
+          Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
+      finally
+        FDataLink.ActiveRecord:=Old;
+      end;
     end;
   end else begin
     DS.DisableControls;
@@ -6646,9 +6893,8 @@ begin
       var Bookmark:=DS.Bookmark;
       try
         if LocateRow(DS,ARow) then
-          for var i:=0 to High(Fields) do begin
+          for var i:=0 to High(Fields) do
             Result.Cells[i]:=FieldToText(Cols[i],Fields[i]);
-          end;
       finally
         if DS.BookmarkValid(Bookmark) then
           DS.Bookmark:=Bookmark;
@@ -7141,7 +7387,10 @@ function TMultiHeaderDBGrid.CurrentRowIndex: Integer;
 begin
   Result:=-1;
   var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) or DS.IsEmpty then Exit;
+  if (DS=nil) or (not DS.Active) then Exit;
+
+  if (DS.State=dsInsert) and (FInsertRowIndex>=0) then Exit(FInsertRowIndex);
+  if DS.IsEmpty then Exit;
 
   if FUseBookmarkFallback then begin
     var Cur:=DS.Bookmark;
@@ -7190,9 +7439,24 @@ begin
 
     FCellTexts.Clear;
 
+    // VCL buffer model: size the DataLink window to cover the visible rows so
+    // ActiveRecord can read any visible record (incl. the pending insert).
+    var VisRows:=Trunc(ViewPortDataHeight/Max(1,DefaultRowHeight))+2;
+    if VisRows<1 then VisRows:=1;
+    if FDataLink.BufferCount<>VisRows then FDataLink.BufferCount:=VisRows;
+
+    var Inserting:=(DS.State=dsInsert);
+    if not Inserting then FInsertRowIndex:=-1;
+
     if DataSetSupportsRecNo(DS) then begin
-      // Native (sequenced) path: RecordCount is authoritative.
-      RowCount:=DS.RecordCount;
+      // Native path. VCL buffer model: during dsInsert the pending record is an
+      // extra visible row; grow RowCount by one (through the setter so FRowData
+      // stays consistent). FInsertRowIndex holds its grid position.
+      if Inserting then begin
+        if FInsertRowIndex<0 then FInsertRowIndex:=DS.RecordCount;
+        RowCount:=DS.RecordCount+1;
+      end else
+        RowCount:=DS.RecordCount;
     end else begin
       // Fallback: live fetch. Reset the index and pull the initial view; the
       // count then grows on demand as the user scrolls. RecordCount unused.
@@ -7212,7 +7476,8 @@ begin
   if FLiveFetching or FNativeFetching then Exit;
 
   var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) or DS.IsEmpty then Exit;
+  if (DS=nil) or (not DS.Active) then Exit;
+  if DS.IsEmpty and (DS.State<>dsInsert) then Exit;
 
   var NewRow:=CurrentRowIndex;
   if NewRow<0 then Exit;
@@ -7249,12 +7514,42 @@ begin
 
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
+
+  // Leaving a pending insert row commits it (VCL behaviour). If the post fails
+  // (e.g. a required field is still empty) keep the caret on the row so the
+  // user can fix it, and let the error surface. Escape clears the selection
+  // (Row < 0) - that cancels the pending record instead of posting it.
+  if (DS.State=dsInsert) and (FInsertRowIndex>=0) and (Row<>FInsertRowIndex) then begin
+    if Row<0 then begin
+      if FEditing then CancelEditing
+      else begin FInsertRowIndex:=-1; DS.Cancel; end;
+      Exit;
+    end;
+    if FEditing then CommitEditing;
+    try
+      DS.Post;
+    except
+      FUpdatingRow:=True;
+      try
+        Row:=FInsertRowIndex;   // snap back to the still-open insert row
+      finally
+        FUpdatingRow:=False;
+      end;
+      raise;
+    end;
+    FInsertRowIndex:=-1;
+    // RowCount collapses on the DataSetChanged that follows the post.
+  end;
+
   if (Row<0) or (Row>=EffectiveRowCount) then Exit;
   if CurrentRowIndex=Row then Exit;
 
   FUpdatingRow:=True;
   try
-    LocateRow(DS,Row); // RecNo (native) or Bookmark (fallback)
+    var RecRow:=Row;
+    if (DS.State=dsInsert) and (FInsertRowIndex>=0) and (Row>FInsertRowIndex) then
+      RecRow:=Row-1;
+    LocateRow(DS,RecRow); // RecNo (native) or Bookmark (fallback)
   finally
     FUpdatingRow:=False;
   end;
@@ -7483,11 +7778,19 @@ end;
 
 function TMultiHeaderDBGrid.EditorKindForField(Field: TField): TMHGEditorKind;
 begin
+  Result:=EditorKindForField(Field, False);
+end;
+
+function TMultiHeaderDBGrid.EditorKindForField(Field: TField;
+  AIgnoreReadOnly: Boolean): TMHGEditorKind;
+begin
   Result:=ekNone;
   if Field=nil then Exit;
 
   // Read-only and non-data (calculated/internal-calc) fields are never edited.
-  if Field.ReadOnly then Exit;
+  // With AIgnoreReadOnly the read-only gate is skipped so the cell can still
+  // open the type's editor in read-only mode (copy only).
+  if Field.ReadOnly and (not AIgnoreReadOnly) then Exit;
   if Field.FieldKind in [fkCalculated, fkInternalCalc] then Exit;
 
   // Lookup fields -> combobox of the looked-up values.
@@ -7951,18 +8254,134 @@ end;
 
 function TMultiHeaderDBGrid.CanEditCell(ACol, ARow: Integer): Boolean;
 begin
+  // An editor may open even when the grid/field is read-only, so its text can
+  // be selected and copied (the editor itself is set read-only by the base via
+  // CellIsModifiable). Boolean fields are excluded - they toggle in place.
   Result:=False;
-  if FReadOnly then Exit;
   if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
 
   var Field:=FieldForCol(ACol);
   if Field=nil then Exit;
 
-  // Editable through an inplace editor only when a typed editor exists.
-  // Boolean fields are NOT edited this way - they toggle in place
-  // (CellIsToggle / ToggleCell), so they are excluded here.
-  var Kind:=EditorKindForField(Field);
+  var Kind:=EditorKindForField(Field, True); // ignore ReadOnly: open for copy
   Result:=(Kind<>ekNone) and (Kind<>ekCheckBox);
+end;
+
+function TMultiHeaderDBGrid.CellIsModifiable(ACol, ARow: Integer): Boolean;
+begin
+  // A DB cell accepts edits only when the grid isn't ReadOnly, the dataset can
+  // modify, and the bound field is itself writable.
+  Result:=False;
+  if FReadOnly then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
+
+  var Field:=FieldForCol(ACol);
+  if (Field=nil) or Field.ReadOnly then Exit;
+
+  var Kind:=EditorKindForField(Field); // honours field ReadOnly
+  Result:=(Kind<>ekNone) and (Kind<>ekCheckBox);
+end;
+
+procedure TMultiHeaderDBGrid.ApplyEditorReadOnly(Ed: TControl; AModifiable: Boolean);
+begin
+  // TDateEdit / TTimeEdit are not TCustomEdit descendants, so handle them here;
+  // everything else (memo, number edit, combo) goes through the base.
+  if Ed is TCustomDateEdit then
+    TCustomDateEdit(Ed).ReadOnly:=not AModifiable
+  else if Ed is TCustomTimeEdit then
+    TCustomTimeEdit(Ed).ReadOnly:=not AModifiable
+  else
+    inherited;
+
+  // The ftDateTime composite opens the date control as the active editor but
+  // also shows the time control beside it; keep both in the same state.
+  if (Ed=FDateEditor) and (FTimeEditor<>nil) and
+     (FEditField<>nil) and (EditorKindForField(FEditField, True)=ekDateTime) then
+    FTimeEditor.ReadOnly:=not AModifiable;
+end;
+
+
+function TMultiHeaderDBGrid.HandleDownKey: Boolean;
+// Mirrors VCL TDBGrid.NextRow for a plain Down press:
+//   - On an unmodified pending insert at Eof: do nothing (stay).
+//   - On the last record (Eof reached after the move): append a new record.
+//   - Otherwise: fall through to a normal one-row move.
+begin
+  Result:=False;
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) then Exit;
+
+  var AtLast:=(EffectiveRowCount>0) and (Row>=EffectiveRowCount-1);
+
+  // An unmodified, freshly-inserted record sitting at the end: Down keeps the
+  // caret there instead of appending another empty record.
+  if (DS.State=dsInsert) and (not DS.Modified) and AtLast then
+    Exit(True);
+
+  // Moving down from the last record appends a new (open) record - but only
+  // when modifiable and the true end is known (no pending on-demand fetch).
+  if AtLast and DS.CanModify and (not FReadOnly) and (not EndIsOnDemand) then begin
+    AppendRow;
+    Exit(True);
+  end;
+
+  // Not at the end (or not modifiable): let the base move down one row.
+  Result:=False;
+end;
+
+procedure TMultiHeaderDBGrid.InsertRow(ARow: Integer);
+// Puts the dataset into insert mode at grid row ARow and leaves the new record
+// open for the user to fill in - exactly like VCL TDBGrid. It does NOT post:
+// required fields (keys, generators, etc.) are the application's responsibility,
+// via the dataset's OnNewRecord or the grid's OnInsertRow event.
+begin
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
+  if not DoInsertRow(ARow) then Exit;
+
+  if FEditing then CancelEditing;
+  LocateRow(DS, Max(0, ARow));
+  FInsertRowIndex:=Max(0, ARow); // phantom row shown before the current row
+  DS.Insert;
+end;
+
+procedure TMultiHeaderDBGrid.AppendRow;
+// Puts the dataset into insert mode at the end (Append) and leaves the new
+// record open for editing. Like InsertRow, it does NOT post - the application
+// fills required fields. Mirrors VCL TDBGrid's append behaviour.
+begin
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
+  if not DoAppendRow(RowCount) then Exit;
+
+  if FEditing then CancelEditing;
+  FInsertRowIndex:=DS.RecordCount; // phantom row shown after the last row
+  DS.Append;
+end;
+
+procedure TMultiHeaderDBGrid.DeleteRow(ARow: Integer);
+// Deletes the record at grid row ARow. When ConfirmDelete is set it first asks
+// for confirmation (OK/Cancel), matching VCL TDBGrid's dgConfirmDelete prompt.
+begin
+  var DS:=DataSet;
+  if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
+  if (ARow<0) or (ARow>=RowCount) then Exit;
+  if DS.IsEmpty then Exit;
+  if not DoDeleteRow(ARow) then Exit;
+
+  if FConfirmDelete and
+     (TDialogServiceSync.MessageDialog('Delete record?',
+        TMsgDlgType.mtConfirmation, [TMsgDlgBtn.mbOK, TMsgDlgBtn.mbCancel],
+        TMsgDlgBtn.mbOK, 0)=mrCancel) then Exit;
+
+  if FEditing then CancelEditing;
+  HideEditor;
+
+  if LocateRow(DS, ARow) then
+    DS.Delete;
 end;
 
 function TMultiHeaderDBGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
@@ -8038,7 +8457,7 @@ begin
   if Field=nil then Exit;
 
   FEditField:=Field;
-  var Kind:=EditorKindForField(Field);
+  var Kind:=EditorKindForField(Field, True); // open even for read-only (copy)
 
   case Kind of
     ekMemo:
@@ -8298,9 +8717,13 @@ var
         // ekMemo and any text path: round-trip via AsString.
         Field.AsString:=GetEditorText;
       end;
-      DS.Post;
+      // During an insert, keep the record open (don't post per field) so the
+      // user can fill required fields; the row is committed when it's left.
+      // Editing an existing record posts immediately as before.
+      if DS.State<>dsInsert then
+        DS.Post;
     except
-      DS.Cancel;
+      if DS.State<>dsInsert then DS.Cancel;
       raise;
     end;
   end;
@@ -8315,7 +8738,7 @@ begin
   if Field.ReadOnly then Exit;
 
   try
-    if ARow=DS.RecNo-1 then
+    if (ARow=CurrentRowIndex) or (ARow=DS.RecNo-1) then
       ApplyToCurrentRecord
     else begin
       DS.DisableControls;
@@ -8364,6 +8787,12 @@ procedure TMultiHeaderDBGrid.CancelEditing;
 begin
   inherited;
   FEditField:=nil;
+  // Escape on a pending insert discards the new record (VCL behaviour).
+  var DS:=DataSet;
+  if (DS<>nil) and DS.Active and (DS.State=dsInsert) then begin
+    FInsertRowIndex:=-1;
+    DS.Cancel;
+  end;
 end;
 
 function TMultiHeaderDBGrid.ClearButtonWidth(Field: TField): single;
