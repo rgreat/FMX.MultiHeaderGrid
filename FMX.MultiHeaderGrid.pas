@@ -3,7 +3,7 @@ unit FMX.MultiHeaderGrid;
 interface
 
 uses
-  System.Classes, System.Types, System.UITypes, System.Generics.Collections,
+  System.Classes, System.Types, System.UITypes, System.Generics.Collections, System.Generics.Defaults,
   FMX.Types, FMX.Controls, FMX.Graphics, FMX.StdCtrls, FMX.Objects, FMX.Layouts,
   FMX.Memo, FMX.ListBox, FMX.DateTimeCtrls, FMX.DateTimeCtrls.Types, FMX.Edit, FMX.EditBox,
   FMX.NumberBox, FMX.Text, Data.DB;
@@ -1035,7 +1035,28 @@ type
         Cells     : TArray<string>;
         Styles    : TArray<TCellStyle>;
       end;
-      TRowsData = TDictionary<integer,TDBRowData>;
+      // Per-row text/style cache. Entries are stored under stable (record-space)
+      // keys. A pending insert is expressed as a shift state (InsertRow) rather
+      // than by physically moving entries: on access the grid row is mapped to a
+      // stable key by subtracting one for rows past InsertRow, and the insert
+      // row itself has no stored entry. SetInsertRow(-1) clears the shift.
+      TRowsData = class
+      private
+        FMap: TDictionary<integer,TDBRowData>;
+        FInsertRow: Integer; // grid row of the pending insert, or -1
+        function VisualToGrid(AGridRow: Integer): Integer; inline;
+      public
+        constructor Create(ACapacity: Integer);
+        destructor Destroy; override;
+        procedure SetInsertRow(AGridRow: Integer);
+        function TryGetValue(AGridRow: Integer; out AValue: TDBRowData): Boolean;
+        procedure AddOrSetValue(AGridRow: Integer; const AValue: TDBRowData);
+        procedure Remove(AGridRow: Integer);
+        procedure Clear;
+        function Count: Integer;
+        procedure RemoveRow(AKey: Integer);
+        procedure TrimToSize(AMaxCount: Integer);
+      end;
 
     var
       FDataLink: TMHGDataLink;
@@ -1048,6 +1069,10 @@ type
       // Grid row of the pending insert record during dsInsert (VCL buffer-style
       // phantom row); -1 otherwise.
       FInsertRowIndex: Integer;
+      // RowCount the per-row text/style cache (FCellTexts) was last built for.
+      // UpdateRowCount compares against it to invalidate only what actually
+      // shifted instead of clearing the whole cache on every DataSetChanged.
+      FCachedRowCount: Integer;
       // --- On-demand rows: native RecNo/RecordCount + live growth --------
       // The grid always uses the dataset's native RecNo/RecordCount. When the
       // dataset fetches on demand (FireDAC FetchOptions.Mode is fmManual/
@@ -1127,7 +1152,6 @@ type
     // per-column DisplayFormat or the grid DateFormat/TimeFormat for
     // date/time/datetime fields; falls back to Field.AsString otherwise.
     function FieldToText(ACol: TMHGColumn; AField: TField): string;
-    procedure CleanUpCache;
     function GetVisibleFields: TArray<TField>;
     function GetRowData(ARow: Integer): TDBRowData;
     procedure SetFieldValue(DS: TDataSet; Field: TField; const Text: string);
@@ -1160,11 +1184,6 @@ type
     // 0-based index of the current record: RecNo-1, or the pending insert row
     // during dsInsert. -1 if unknown.
     function  CurrentRowIndex: Integer;
-    // Native-path live growth: step the cursor forward (bounded by Eof) until
-    // grid row ATargetRow is materialized, or to Eof when ATargetRow < 0, then
-    // adopt the grown RecordCount. Shared by EnsureRowAvailable /
-    // EnsureRowsForViewport and the End-key fetch. No-op once fully loaded.
-    procedure GrowNativeTo(ATargetRow: Integer);
   protected
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
     procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
@@ -1174,7 +1193,6 @@ type
     // Row-provider overrides: the DB grid supplies rows on demand from the
     // dataset, growing RowCount as the grid navigates/scrolls/scans.
     procedure DoGridScroll; override;
-    procedure EnsureRowsForViewport(ATargetTop: Integer);
     procedure EnsureRowAvailable(ARow: Integer); override;
     function  ColScanRowLimit: Integer; override;
     // End-key handling and on-demand End-fetch cancellation live here (not in the
@@ -1354,7 +1372,8 @@ procedure Register;
 implementation
 
 uses
-  System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects, FMX.DialogService.Sync;
+  System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects, FMX.DialogService.Sync,
+  System.DateUtils;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -6482,6 +6501,130 @@ begin
   if FGrid<>nil then FGrid.InvalidateCurrentRow;
 end;
 
+{ TMultiHeaderDBGrid.TRowsData }
+
+constructor TMultiHeaderDBGrid.TRowsData.Create(ACapacity: Integer);
+begin
+  inherited Create;
+  FMap:=TDictionary<integer,TDBRowData>.Create(ACapacity);
+  FInsertRow:=-1;
+end;
+
+destructor TMultiHeaderDBGrid.TRowsData.Destroy;
+begin
+  FMap.Free;
+  inherited;
+end;
+
+function TMultiHeaderDBGrid.TRowsData.VisualToGrid(AGridRow: Integer): Integer;
+begin
+  // Rows past the pending insert map to their pre-insert (stable) key.
+  if (FInsertRow>=0) and (AGridRow>FInsertRow) then begin
+    Result:=AGridRow-1
+  end else begin
+    Result:=AGridRow;
+  end;
+end;
+
+procedure TMultiHeaderDBGrid.TRowsData.SetInsertRow(AGridRow: Integer);
+begin
+  FInsertRow:=AGridRow;
+end;
+
+function TMultiHeaderDBGrid.TRowsData.TryGetValue(AGridRow: Integer;
+  out AValue: TDBRowData): Boolean;
+begin
+  // The phantom insert row has no stored entry - it always reads live.
+  if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit(False);
+  Result:=FMap.TryGetValue(VisualToGrid(AGridRow),AValue);
+end;
+
+procedure TMultiHeaderDBGrid.TRowsData.AddOrSetValue(AGridRow: Integer;
+  const AValue: TDBRowData);
+begin
+  if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit;
+  FMap.AddOrSetValue(VisualToGrid(AGridRow),AValue);
+end;
+
+procedure TMultiHeaderDBGrid.TRowsData.Remove(AGridRow: Integer);
+begin
+  if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit;
+  FMap.Remove(VisualToGrid(AGridRow));
+end;
+
+procedure TMultiHeaderDBGrid.TRowsData.Clear;
+begin
+  FMap.Clear;
+  FInsertRow:=-1;
+end;
+
+function TMultiHeaderDBGrid.TRowsData.Count: Integer;
+begin
+  Result:=FMap.Count;
+end;
+
+procedure TMultiHeaderDBGrid.TRowsData.RemoveRow(AKey: Integer);
+begin
+  FMap.Remove(AKey);
+end;
+
+
+procedure TMultiHeaderDBGrid.TRowsData.TrimToSize(AMaxCount: Integer);
+var
+  ToRemove, i, n: Integer;
+
+  function Log2Floor(AValue: Integer): Integer;
+  begin
+    // floor(log2(AValue)); 0 for AValue <= 1
+    Result := 0;
+    while AValue > 1 do begin
+      AValue := AValue shr 1;
+      Inc(Result);
+    end;
+  end;
+
+begin
+  ToRemove := FMap.Count - AMaxCount;
+  if ToRemove <= 0 then Exit;
+
+  if ToRemove <= Log2Floor(FMap.Count) then begin
+    // Few removals: in-place min search, no allocation.
+    for i := 1 to ToRemove do begin
+      var MinTime: TDateTime;
+      var MinKey := -1;
+      var IsFirst := True;
+      for var Item in FMap do
+        if IsFirst or (Item.Value.LastUsage < MinTime) then begin
+          MinTime := Item.Value.LastUsage;
+          MinKey  := Item.Key;
+          IsFirst := False;
+        end;
+      if MinKey >= 0 then
+        RemoveRow(MinKey)
+      else
+        Break;
+    end;
+  end else begin
+    // Many removals: snapshot + sort once.
+    var Entries: TArray<TPair<Integer, TDateTime>>;
+    SetLength(Entries, FMap.Count);
+    n := 0;
+    for var Item in FMap do begin
+      Entries[n].Key   := Item.Key;
+      Entries[n].Value := Item.Value.LastUsage;
+      Inc(n);
+    end;
+    TArray.Sort<TPair<Integer, TDateTime>>(Entries,
+      TComparer<TPair<Integer, TDateTime>>.Construct(
+        function(const L, R: TPair<Integer, TDateTime>): Integer
+        begin
+          Result := CompareDateTime(L.Value, R.Value);
+        end));
+    for i := 0 to ToRemove - 1 do
+      RemoveRow(Entries[i].Key);
+  end;
+end;
+
 { TMultiHeaderDBGrid }
 
 function TMultiHeaderDBGrid.Column(FieldNum: integer): THeaderElement;
@@ -6490,29 +6633,6 @@ begin
 
   Result:=FHeaderLevels.Last[FieldNum];
 end;
-
-{$WARN USE_BEFORE_DEF OFF}
-procedure TMultiHeaderDBGrid.CleanUpCache;
-begin
-  while FCellTexts.Count>FRowCacheSize do begin
-    var MinTime: TDateTime;
-    var MinRow:=-1;
-    var IsFirst:=True;
-    for var Item in FCellTexts do begin
-      if IsFirst or (Item.Value.LastUsage<MinTime) then begin
-        MinTime:=Item.Value.LastUsage;
-        MinRow:=Item.Key;
-        IsFirst:=False;
-      end;
-    end;
-    if MinRow>=0 then begin
-      FCellTexts.Remove(MinRow);
-    end else begin
-      Break;
-    end;
-  end;
-end;
-{$WARN USE_BEFORE_DEF ON}
 
 function TMultiHeaderDBGrid.Column(FieldName: string): THeaderElement;
 begin
@@ -6532,6 +6652,7 @@ begin
   FRowCacheSize:=1000;
   FConfirmDelete:=True;
   FInsertRowIndex:=-1;
+  FCachedRowCount:=0;
   FDateFormat:='DD.MM.YYYY';
   FTimeFormat:='HH:NN:SS';
   FCellTexts:=TRowsData.Create(FRowCacheSize);
@@ -6628,8 +6749,8 @@ begin
   RowData.LastUsage:=Now;
 
   // RowData is a copy of the cache entry; write the copy back
-  // to the dictionary so the change is persisted.
-  FCellTexts[ARow]:=RowData;
+  // to the cache so the change is persisted.
+  FCellTexts.AddOrSetValue(ARow,RowData);
 
   Invalidate;
 end;
@@ -6804,7 +6925,17 @@ procedure TMultiHeaderDBGrid.SetViewTop(const Value: Integer);
 begin
   // Fetch more rows before we clamp to the current last row,
   // otherwise the viewport can never grow past materialized rows.
-  EnsureRowsForViewport(Value);
+
+  if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
+  if Length(FRowData)=0 then Exit;
+
+  // If the requested top reaches the last known row, pull more so the clamp in
+  // SetViewTop can move further.
+  var LastTop:=FRowData[High(FRowData)].Top;
+  if Value+ViewCellsHeight>=LastTop then begin
+    var TargetRow:=RowCount-1+Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
+    EnsureRowAvailable(TargetRow);
+  end;
 
   inherited;
 end;
@@ -6812,6 +6943,7 @@ end;
 procedure TMultiHeaderDBGrid.RefreshCells;
 begin
   FCellTexts.Clear;
+  FCachedRowCount:=-1; // force UpdateRowCount to rebuild regardless of count
   Invalidate;
 end;
 
@@ -6823,7 +6955,7 @@ begin
     // but Result itself is independent). LastUsage is updated and
     // the copy is written back for correct LRU behaviour.
     Result.LastUsage:=Now;
-    FCellTexts[ARow]:=Result;
+    FCellTexts.AddOrSetValue(ARow,Result);
     Exit;
   end;
 
@@ -6880,7 +7012,7 @@ begin
   // Result is an independent copy (with its own references to
   // Cells/Styles), so CleanUpCache can safely remove the entry from
   // the dictionary - even evicting ARow itself won't affect Result.
-  CleanUpCache;
+  FCellTexts.TrimToSize(FRowCacheSize);
 end;
 
 procedure TMultiHeaderDBGrid.ResetTable;
@@ -6891,7 +7023,7 @@ begin
   FRebuildingHeader:=True;
   try
     FCellTexts.Clear;
-
+    FCachedRowCount:=-1; // cache emptied; force the next UpdateRowCount to rebuild
     var DS:=DataSet;
     if (DS=nil) or (not DS.Active) then begin
       FColMap:=nil;
@@ -7204,7 +7336,7 @@ begin
       Ctx.Free;
     end;
   except
-    Result:=False; // probe failed - assume not on-demand
+    Result:=False;
   end;
 end;
 
@@ -7229,10 +7361,10 @@ begin
     var DS:=DataSet;
     if (DS=nil) or (not DS.Active) then begin
       RowCount:=0;
+      FCellTexts.Clear;
+      FCachedRowCount:=0;
       Exit;
     end;
-
-    FCellTexts.Clear;
 
     // VCL buffer model: size the DataLink window to cover the visible rows so
     // ActiveRecord can read any visible record (incl. the pending insert).
@@ -7241,16 +7373,36 @@ begin
     if FDataLink.BufferCount<>VisRows then FDataLink.BufferCount:=VisRows;
 
     var Inserting:=(DS.State=dsInsert);
-    if not Inserting and (FInsertRowIndex>=0) then FInsertRowIndex:=-1;
+    if not Inserting and (FInsertRowIndex>=0) then begin
+      // Leaving insert (post or cancel): clear the shift so cached rows past the
+      // phantom map back to their own slots, and drop the (now real or gone)
+      // record's cached text so it re-reads.
+      FCellTexts.SetInsertRow(-1);
+      FCellTexts.Remove(FInsertRowIndex);
+      FInsertRowIndex:=-1;
+    end;
 
     // Native path. VCL buffer model: during dsInsert the pending record is an
     // extra visible row; grow RowCount by one (through the setter so FRowData
     // stays consistent). FInsertRowIndex holds its grid position.
+    var NewCount: Integer;
     if Inserting then begin
       if FInsertRowIndex<0 then FInsertRowIndex:=DS.RecordCount;
-      RowCount:=DS.RecordCount+1;
+      NewCount:=DS.RecordCount+1;
     end else
-      RowCount:=DS.RecordCount;
+      NewCount:=DS.RecordCount;
+
+    // Cache invalidation. The cache maps grid rows to stable record-space keys.
+    // On a clean insert (count grew by exactly one) mark the shift so rows past
+    // the phantom keep their cached text without physically moving entries; when
+    // the count is unchanged an edit/post already dropped its own row; otherwise
+    // (delete, external refresh, filter) the shift point is unknown, so clear.
+    if Inserting and (NewCount=FCachedRowCount+1) then begin
+      FCellTexts.SetInsertRow(FInsertRowIndex);
+    end;
+
+    RowCount:=NewCount;
+    FCachedRowCount:=NewCount;
 
     SyncSelectedRowFromDataSet;
     Invalidate;
@@ -7310,7 +7462,7 @@ begin
   if (DS.State=dsInsert) and (FInsertRowIndex>=0) and (Row<>FInsertRowIndex) then begin
     if Row<0 then begin
       if FEditing then CancelEditing
-      else begin FInsertRowIndex:=-1; DS.Cancel; end;
+      else begin FCellTexts.SetInsertRow(-1); FInsertRowIndex:=-1; DS.Cancel; end;
       Exit;
     end;
     if FEditing then CommitEditing;
@@ -7325,6 +7477,7 @@ begin
       end;
       raise;
     end;
+    FCellTexts.SetInsertRow(-1);
     FInsertRowIndex:=-1;
     // RowCount collapses on the DataSetChanged that follows the post.
   end;
@@ -7363,53 +7516,6 @@ begin
   // On-demand cursor with a partial RecordCount: pull the next packet(s) when
   // the last visible row reaches the known count.
   if LastVisible>=RowCount-1 then EnsureRowAvailable(LastVisible+1);
-end;
-
-procedure TMultiHeaderDBGrid.GrowNativeTo(ATargetRow: Integer);
-// Native-path growth shared by the navigation/scroll/End paths. Steps the cursor
-// forward from the fetched edge with Next - bounded by Eof - until ATargetRow is
-// materialized (ATargetRow < 0 means "to Eof"), then adopts the grown
-// RecordCount. Avoids DS.Last (which can fetch the whole set at once on a
-// partial cursor). Captures the count while still at the fetched position, since
-// restoring the bookmark can revert RecordCount on some FireDAC cursors.
-begin
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then Exit;
-  if FNativeAllFetched then Exit;
-  if FNativeFetching then Exit;
-  if (ATargetRow>=0) and (ATargetRow<RowCount) then Exit; // already known
-
-  FNativeFetching:=True;
-  try
-    try
-      DS.DisableControls;
-      var FinalCount:=RowCount;
-      try
-        var BM:=DS.Bookmark;
-        try
-          if DS.RecordCount>0 then DS.RecNo:=DS.RecordCount; // resume at fetched edge
-          var Guard:=0;
-          while (not DS.Eof) and ((ATargetRow<0) or (DS.RecordCount<=ATargetRow))
-                and (not FEndFetchCancelled) do begin // stop promptly when End fetch is cancelled
-            DS.Next;
-            Inc(Guard);
-            if Guard>10000000 then Break;
-          end;
-          if DS.RecordCount>=0 then FinalCount:=DS.RecordCount;
-          if DS.Eof then FNativeAllFetched:=True;
-        finally
-          if DS.BookmarkValid(BM) then DS.Bookmark:=BM;
-        end;
-      finally
-        DS.EnableControls;
-      end;
-      if RowCount<>FinalCount then RowCount:=FinalCount;
-    except
-      // ignore - navigation will simply clamp to the current RowCount
-    end;
-  finally
-    FNativeFetching:=False;
-  end;
 end;
 
 function TMultiHeaderDBGrid.EndIsOnDemand: Boolean;
@@ -7492,23 +7598,48 @@ procedure TMultiHeaderDBGrid.EnsureRowAvailable(ARow: Integer);
 begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
-  GrowNativeTo(ARow);
-end;
+  if FNativeAllFetched then Exit;
+  if FNativeFetching then Exit;
+  if (ARow>=0) and (ARow<RowCount) then Exit; // already known
 
-procedure TMultiHeaderDBGrid.EnsureRowsForViewport(ATargetTop: Integer);
-// From SetViewTop before clamping. If the requested top reaches the bottom of
-// fetched rows and more may exist, pull packet(s) and grow RowCount
-// synchronously (scroll event, not paint) so the clamp sees the new extent.
-begin
-  if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
-  if Length(FRowData)=0 then Exit;
-
-  // If the requested top reaches the last known row, pull more so the clamp in
-  // SetViewTop can move further.
-  var LastTop:=FRowData[High(FRowData)].Top;
-  if ATargetTop+ViewCellsHeight>=LastTop then begin
-    var TargetRow:=RowCount-1+Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
-    GrowNativeTo(TargetRow);
+  FNativeFetching:=True;
+  try
+    DS.DisableControls;
+    var FinalCount:=RowCount;
+    try
+      var BM:=DS.Bookmark;
+      try
+        if DS.RecordCount>0 then DS.RecNo:=DS.RecordCount; // resume at fetched edge
+        while (not DS.Eof) and
+             ((ARow<0) or (DS.RecordCount<=ARow))
+              and (not FEndFetchCancelled) do begin // stop promptly when End fetch is cancelled
+          DS.Next;
+        end;
+        if DS.RecordCount>=0 then FinalCount:=DS.RecordCount;
+        if DS.Eof then begin
+          FNativeAllFetched:=True;
+        end else begin
+          DS.DisableControls;
+          var OldBM:=DS.GetBookmark;
+          try
+            DS.Next;
+            if DS.CompareBookmarks(DS.GetBookmark,OldBM)=0 then begin
+              FNativeAllFetched:=True;
+            end;
+          finally
+            DS.EnableControls;
+            DS.GotoBookmark(OldBM);
+          end;
+        end;
+      finally
+        if DS.BookmarkValid(BM) then DS.Bookmark:=BM;
+      end;
+    finally
+      DS.EnableControls;
+    end;
+    if RowCount<>FinalCount then RowCount:=FinalCount;
+  finally
+    FNativeFetching:=False;
   end;
 end;
 
@@ -8536,6 +8667,7 @@ begin
   // Escape on a pending insert discards the new record (VCL behaviour).
   var DS:=DataSet;
   if (DS<>nil) and DS.Active and (DS.State=dsInsert) then begin
+    FCellTexts.SetInsertRow(-1);
     FInsertRowIndex:=-1;
     DS.Cancel;
   end;
@@ -8772,7 +8904,7 @@ begin
   if FRowCacheSize<>Value then begin
     FRowCacheSize:=Value;
 
-    CleanUpCache;
+    FCellTexts.TrimToSize(FRowCacheSize);
   end;
 end;
 
