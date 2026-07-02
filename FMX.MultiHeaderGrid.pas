@@ -1030,8 +1030,8 @@ type
   TMultiHeaderDBGrid = class(TMultiHeaderGrid)
   private
     type
-      TDBRowData = record
-        LastUsage : TDateTime;
+      TDBRowData = class
+        LastUsage : int64;
         Cells     : TArray<string>;
         Styles    : TArray<TCellStyle>;
       end;
@@ -1042,15 +1042,15 @@ type
       // row itself has no stored entry. SetInsertRow(-1) clears the shift.
       TRowsData = class
       private
-        FMap: TDictionary<integer,TDBRowData>;
+        FMap: TObjectDictionary<integer,TDBRowData>;
         FInsertRow: Integer; // grid row of the pending insert, or -1
         function VisualToGrid(AGridRow: Integer): Integer; inline;
       public
         constructor Create(ACapacity: Integer);
         destructor Destroy; override;
         procedure SetInsertRow(AGridRow: Integer);
-        function TryGetValue(AGridRow: Integer; out AValue: TDBRowData): Boolean;
-        procedure AddOrSetValue(AGridRow: Integer; const AValue: TDBRowData);
+        function GetRow(AGridRow: Integer): TDBRowData;
+        procedure SetRow(AGridRow: Integer; AValue: TDBRowData);
         procedure Remove(AGridRow: Integer);
         procedure Clear;
         function Count: Integer;
@@ -1373,7 +1373,7 @@ implementation
 
 uses
   System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects, FMX.DialogService.Sync,
-  System.DateUtils;
+  System.DateUtils, System.Diagnostics;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -6506,7 +6506,7 @@ end;
 constructor TMultiHeaderDBGrid.TRowsData.Create(ACapacity: Integer);
 begin
   inherited Create;
-  FMap:=TDictionary<integer,TDBRowData>.Create(ACapacity);
+  FMap:=TObjectDictionary<integer,TDBRowData>.Create([doOwnsValues],ACapacity);
   FInsertRow:=-1;
 end;
 
@@ -6531,18 +6531,22 @@ begin
   FInsertRow:=AGridRow;
 end;
 
-function TMultiHeaderDBGrid.TRowsData.TryGetValue(AGridRow: Integer;
-  out AValue: TDBRowData): Boolean;
+function TMultiHeaderDBGrid.TRowsData.GetRow(AGridRow: Integer): TDBRowData;
 begin
   // The phantom insert row has no stored entry - it always reads live.
-  if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit(False);
-  Result:=FMap.TryGetValue(VisualToGrid(AGridRow),AValue);
+  if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit(nil);
+  var Row:=VisualToGrid(AGridRow);
+  if FMap.TryGetValue(Row,Result) then begin
+    Result.LastUsage:=TStopwatch.GetTimeStamp;
+  end else begin
+    Exit(nil);
+  end;
 end;
 
-procedure TMultiHeaderDBGrid.TRowsData.AddOrSetValue(AGridRow: Integer;
-  const AValue: TDBRowData);
+procedure TMultiHeaderDBGrid.TRowsData.SetRow(AGridRow: Integer; AValue: TDBRowData);
 begin
   if (FInsertRow>=0) and (AGridRow=FInsertRow) then Exit;
+  AValue.LastUsage:=TStopwatch.GetTimeStamp;
   FMap.AddOrSetValue(VisualToGrid(AGridRow),AValue);
 end;
 
@@ -6568,7 +6572,6 @@ begin
   FMap.Remove(AKey);
 end;
 
-
 procedure TMultiHeaderDBGrid.TRowsData.TrimToSize(AMaxCount: Integer);
 var
   ToRemove, i, n: Integer;
@@ -6590,38 +6593,46 @@ begin
   if ToRemove <= Log2Floor(FMap.Count) then begin
     // Few removals: in-place min search, no allocation.
     for i := 1 to ToRemove do begin
-      var MinTime: TDateTime;
+      var MinTime: TDateTime := 0;
       var MinKey := -1;
       var IsFirst := True;
-      for var Item in FMap do
+
+      for var Item in FMap do begin
         if IsFirst or (Item.Value.LastUsage < MinTime) then begin
           MinTime := Item.Value.LastUsage;
           MinKey  := Item.Key;
           IsFirst := False;
         end;
-      if MinKey >= 0 then
-        RemoveRow(MinKey)
-      else
+      end;
+
+      if MinKey >= 0 then begin
+        RemoveRow(MinKey);
+      end else begin
         Break;
+      end;
     end;
   end else begin
     // Many removals: snapshot + sort once.
-    var Entries: TArray<TPair<Integer, TDateTime>>;
+    var Entries: TArray<TPair<Integer, int64>>;
     SetLength(Entries, FMap.Count);
     n := 0;
+
     for var Item in FMap do begin
       Entries[n].Key   := Item.Key;
       Entries[n].Value := Item.Value.LastUsage;
       Inc(n);
     end;
-    TArray.Sort<TPair<Integer, TDateTime>>(Entries,
-      TComparer<TPair<Integer, TDateTime>>.Construct(
-        function(const L, R: TPair<Integer, TDateTime>): Integer
+
+    TArray.Sort<TPair<Integer, int64>>(Entries,
+      TComparer<TPair<Integer, int64>>.Construct(
+        function(const L, R: TPair<Integer, int64>): Integer
         begin
-          Result := CompareDateTime(L.Value, R.Value);
+          Result := CompareValue(L.Value, R.Value);
         end));
-    for i := 0 to ToRemove - 1 do
+
+    for i := 0 to ToRemove - 1 do begin
       RemoveRow(Entries[i].Key);
+    end;
   end;
 end;
 
@@ -6698,8 +6709,9 @@ begin
   // Don't create a cache entry just to check the style -
   // it's enough to see whether the row is already cached.
   if (ARow>=0) and (ACol>=0) then begin
-    var RowData: TDBRowData;
-    if FCellTexts.TryGetValue(ARow,RowData) then begin
+    var RowData:=FCellTexts.GetRow(ARow);
+
+    if Assigned(RowData) then begin
       if (ACol<=High(RowData.Styles)) and (not RowData.Styles[ACol].IsEmpty) then begin
         Style:=RowData.Styles[ACol];
       end;
@@ -6746,11 +6758,10 @@ begin
   end;
 
   RowData.Styles[ACol]:=Style;
-  RowData.LastUsage:=Now;
 
   // RowData is a copy of the cache entry; write the copy back
   // to the cache so the change is persisted.
-  FCellTexts.AddOrSetValue(ARow,RowData);
+  FCellTexts.SetRow(ARow,RowData);
 
   Invalidate;
 end;
@@ -6923,21 +6934,23 @@ end;
 
 procedure TMultiHeaderDBGrid.SetViewTop(const Value: Integer);
 begin
-  // Fetch more rows before we clamp to the current last row,
-  // otherwise the viewport can never grow past materialized rows.
+  try
+    // Fetch more rows before we clamp to the current last row,
+    // otherwise the viewport can never grow past materialized rows.
 
-  if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
-  if Length(FRowData)=0 then Exit;
+    if FNativeAllFetched then Exit; // whole set loaded; nothing to grow
+    if Length(FRowData)=0 then Exit;
 
-  // If the requested top reaches the last known row, pull more so the clamp in
-  // SetViewTop can move further.
-  var LastTop:=FRowData[High(FRowData)].Top;
-  if Value+ViewCellsHeight>=LastTop then begin
-    var TargetRow:=RowCount-1+Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
-    EnsureRowAvailable(TargetRow);
+    // If the requested top reaches the last known row, pull more so the clamp in
+    // SetViewTop can move further.
+    var LastTop:=FRowData[High(FRowData)].Top;
+    if Value+ViewCellsHeight>=LastTop then begin
+      var TargetRow:=RowCount-1+Max(1,(ViewCellsHeight div Max(1,DefaultRowHeight)));
+      EnsureRowAvailable(TargetRow);
+    end;
+  finally
+    inherited;
   end;
-
-  inherited;
 end;
 
 procedure TMultiHeaderDBGrid.RefreshCells;
@@ -6949,20 +6962,14 @@ end;
 
 function TMultiHeaderDBGrid.GetRowData(ARow: Integer): TDBRowData;
 begin
-  if FCellTexts.TryGetValue(ARow,Result) then begin
-    // Result is a copy of the entry (Cells/Styles are refcounted
-    // dynamic arrays - the data is shared with the dictionary entry,
-    // but Result itself is independent). LastUsage is updated and
-    // the copy is written back for correct LRU behaviour.
-    Result.LastUsage:=Now;
-    FCellTexts.AddOrSetValue(ARow,Result);
-    Exit;
-  end;
+  Result:=FCellTexts.GetRow(ARow);
+  if Assigned(Result) then Exit;
 
   var DS:=DataSet;
   var Fields: TArray<TField>;
   var Cols:=ResolveColumns(Fields); // Cols[i] pairs with Fields[i]
 
+  Result:=TDBRowData.Create;
   SetLength(Result.Cells,Length(Fields));
 
   if ARow=CurrentRowIndex then begin
@@ -7005,14 +7012,12 @@ begin
     end;
   end;
 
-  Result.LastUsage:=Now;
-
-  FCellTexts.AddOrSetValue(ARow,Result);
-
   // Result is an independent copy (with its own references to
   // Cells/Styles), so CleanUpCache can safely remove the entry from
   // the dictionary - even evicting ARow itself won't affect Result.
-  FCellTexts.TrimToSize(FRowCacheSize);
+  FCellTexts.TrimToSize(Max(FRowCacheSize-1,0));
+
+  FCellTexts.SetRow(ARow,Result);
 end;
 
 procedure TMultiHeaderDBGrid.ResetTable;
