@@ -179,12 +179,13 @@ object Form1: TForm1
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
         WordWrap = True
-        HeaderColumns = <>
+        Columns = <
+          item
+          end>
         OnSelectCell = GridSelectCell
         DataSource = DS
         DateFormat = 'DD.MM.YYYY'
         TimeFormat = 'HH:NN:SS'
-        Columns = <>
       end
       object Panel2: TPanel
         Align = Top
@@ -246,32 +247,15 @@ object Form1: TForm1
         Size.Width = 1542.000000000000000000
         Size.Height = 465.000000000000000000
         Size.PlatformDefault = False
+        ColCount = 1
         Col = -1
         Row = -1
         DefaultColWidth = 80
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
-        HeaderColumns = <
+        Columns = <
           item
-            Title = 'Field 1'
-            GroupHeader = 'TMultiHeaderGrid'
-          end
-          item
-            Title = 'Field 2'
-            GroupHeader = 'TMultiHeaderGrid'
-          end
-          item
-            Title = 'Field 3'
-            GroupHeader = 'TMultiHeaderGrid'
-          end
-          item
-            Title = 'Field 4'
-            GroupHeader = 'TMultiHeaderGrid'
-          end
-          item
-            Title = 'Field 5'
-            GroupHeader = 'TMultiHeaderGrid'
           end>
         OnSelectCell = GridSelectCell
         OnDrawCell = GridDrawCell
@@ -310,26 +294,21 @@ object Form1: TForm1
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
-        HeaderColumns = <
+        Columns = <
           item
-            Title = 'Field 1'
-            GroupHeader = 'TMultiHeaderStringGrid'
+            Title = '1'
           end
           item
-            Title = 'Field 2'
-            GroupHeader = 'TMultiHeaderStringGrid'
+            Title = '2'
           end
           item
-            Title = 'Field 3'
-            GroupHeader = 'TMultiHeaderStringGrid'
+            Title = '3'
           end
           item
-            Title = 'Field 4'
-            GroupHeader = 'TMultiHeaderStringGrid'
+            Title = '4'
           end
           item
-            Title = 'Field 5'
-            GroupHeader = 'TMultiHeaderStringGrid'
+            Title = '5'
           end>
         OnSelectCell = GridSelectCell
         OnDrawCell = GridDrawCell

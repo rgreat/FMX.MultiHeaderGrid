@@ -20,13 +20,15 @@ unit FMX.MultiHeaderGrid.Design;
   the existing window instead of leaking forms. The window frees itself on
   close (caFree) and on grid/designer teardown.
 
-  - TMultiHeaderDBGrid: edits the data-bound Columns collection (items are
-    TMHGColumn: FieldName, Color + everything from the base column). Verbs:
-    "Edit Columns...", "Auto Create Columns".
+  All grids edit the single Columns collection declared on the base
+  TMultiHeaderGrid; the item class comes from the collection itself:
 
-  - TMultiHeaderGrid / TMultiHeaderStringGrid: not data bound; they edit the
-    HeaderColumns collection (TMHGHeaderColumn: captions, grouping,
-    alignment, word wrap, widths - everything except FieldName).
+  - TMultiHeaderGrid / TMultiHeaderStringGrid: TMHGHeaderColumn (captions,
+    grouping, alignment, word wrap, widths). Verb: "Edit Columns...".
+
+  - TMultiHeaderDBGrid: TMHGColumn (everything above + FieldName, Color,
+    DateTimeEditor, DisplayFormat). Verbs: "Edit Columns...",
+    "Auto Create Columns".
 
   Uses DesignIntf / DesignEditors and a VCL form, so this unit MUST live in a
   design-time-only package (MultiHeaderGridDsgn.dpk). Do NOT add it to the
@@ -143,20 +145,20 @@ constructor TMHGColumnsEditorForm.CreateEditor(ADesigner: IDesigner;
   AItemClass: TCollectionItemClass; const ACaption: string);
 begin
   inherited CreateNew(Application);
-  FDesigner   := ADesigner;
-  FGrid       := AGrid;
-  FCollection := ACollection;
-  FItemClass  := AItemClass;
+  FDesigner  :=ADesigner;
+  FGrid      :=AGrid;
+  FCollection:=ACollection;
+  FItemClass :=AItemClass;
 
-  Caption     := ACaption;
+  Caption    :=ACaption;
   // Sensible default size; remembers nothing, but starts usable.
-  ClientWidth  := 320;
-  ClientHeight := 600;
-  Constraints.MinWidth  := 260;
-  Constraints.MinHeight := 300;
-  Position    := poScreenCenter;
-  BorderStyle := bsSizeable;
-  OnClose     := FormClose;
+  ClientWidth :=320;
+  ClientHeight:=600;
+  Constraints.MinWidth :=260;
+  Constraints.MinHeight:=300;
+  Position   :=poScreenCenter;
+  BorderStyle:=bsSizeable;
+  OnClose    :=FormClose;
   BuildUI;
   RefreshList;
 end;
@@ -169,63 +171,63 @@ begin
 
   // Actions are the single source of truth: each drives its toolbar button
   // AND its keyboard shortcut(s), with one OnExecute and one OnUpdate.
-  FActions := TActionList.Create(Self);
-  FActions.Images := FGlyphs;
+  FActions:=TActionList.Create(Self);
+  FActions.Images:=FGlyphs;
 
-  FActAdd    := MakeAction('Add',    GI_ADD,    ShortCut(Ord('N'), [ssCtrl]), 0,
+  FActAdd   :=MakeAction('Add',    GI_ADD,    ShortCut(VK_ADD, [ssCtrl]), 0,
                            DoAdd,    nil);   // Add is always enabled
 
-  FActDelete := MakeAction('Delete', GI_DELETE,
+  FActDelete:=MakeAction('Delete', GI_DELETE,
                            ShortCut(VK_DELETE, []),         // plain Del
                            ShortCut(VK_DELETE, [ssCtrl]),   // Ctrl+Del
                            DoDelete, UpdHasSel);
-  FActUp     := MakeAction('Up',     GI_UP,     ShortCut(VK_UP, [ssCtrl]), 0,
+  FActUp    :=MakeAction('Up',     GI_UP,     ShortCut(VK_UP, [ssCtrl]), 0,
                            DoUp,     UpdUp);
-  FActDown   := MakeAction('Down',   GI_DOWN,   ShortCut(VK_DOWN, [ssCtrl]), 0,
+  FActDown  :=MakeAction('Down',   GI_DOWN,   ShortCut(VK_DOWN, [ssCtrl]), 0,
                            DoDown,   UpdDown);
-  FActCopy   := MakeAction('Copy',   GI_COPY,
+  FActCopy  :=MakeAction('Copy',   GI_COPY,
                            ShortCut(Ord('C'), [ssCtrl]),
                            ShortCut(VK_INSERT, [ssCtrl]),
                            DoCopy,   UpdHasSel);
-  FActPaste  := MakeAction('Paste',  GI_PASTE,
+  FActPaste :=MakeAction('Paste',  GI_PASTE,
                            ShortCut(Ord('V'), [ssCtrl]),
                            ShortCut(VK_INSERT, [ssShift]),
                            DoPaste,  UpdPaste);
   // Import: refill columns from the DataSet's fields. DB grid only.
-  FActImport := MakeAction('Import', GI_IMPORT, ShortCut(Ord('I'), [ssCtrl]), 0,
+  FActImport:=MakeAction('Import', GI_IMPORT, ShortCut(Ord('I'), [ssCtrl]), 0,
                            DoImport, UpdImport);
   // Select All: Ctrl+A. No toolbar button - shortcut only.
-  FActSelectAll := MakeAction('Select All', -1, ShortCut(Ord('A'), [ssCtrl]), 0,
+  FActSelectAll:=MakeAction('Select All', -1, ShortCut(Ord('A'), [ssCtrl]), 0,
                               DoSelectAll, UpdHasItems);
 
-  FToolBar := TPanel.Create(Self);
-  FToolBar.Parent     := Self;
-  FToolBar.Align      := alTop;
-  FToolBar.Height     := 62;          // two rows of buttons
-  FToolBar.BevelOuter := bvNone;
-  FToolBar.ParentBackground := False;
+  FToolBar:=TPanel.Create(Self);
+  FToolBar.Parent    :=Self;
+  FToolBar.Align     :=alTop;
+  FToolBar.Height    :=62;          // two rows of buttons
+  FToolBar.BevelOuter:=bvNone;
+  FToolBar.ParentBackground:=False;
 
   // Row 1 (Y=4): item operations.
-  X := 6;
+  X:=6;
   MakeButton(FActAdd,    X, 4);
   MakeButton(FActDelete, X, 4);
   MakeButton(FActUp,     X, 4);
   MakeButton(FActDown,   X, 4);
 
   // Row 2 (Y=32): clipboard + import, restarting from the left.
-  X := 6;
+  X:=6;
   MakeButton(FActCopy,   X, 32);
   MakeButton(FActPaste,  X, 32);
   // Import only makes sense for the data-bound grid (it has a DataSet).
   if FGrid is TMultiHeaderDBGrid then
     MakeButton(FActImport, X, 32);
 
-  FList := TListBox.Create(Self);
-  FList.Parent           := Self;
-  FList.Align            := alClient;
-  FList.MultiSelect      := True;
-  FList.ExtendedSelect   := True;
-  FList.OnClick          := ListClick;
+  FList:=TListBox.Create(Self);
+  FList.Parent          :=Self;
+  FList.Align           :=alClient;
+  FList.MultiSelect     :=True;
+  FList.ExtendedSelect  :=True;
+  FList.OnClick         :=ListClick;
   // No splitter, no gap: the list sits directly under the toolbar.
 end;
 
@@ -235,16 +237,16 @@ procedure TMHGColumnsEditorForm.BuildGlyphs;
 
   function NewGlyph: TBitmap;
   begin
-    Result := TBitmap.Create;
-    Result.PixelFormat := pf24bit;
+    Result:=TBitmap.Create;
+    Result.PixelFormat:=pf24bit;
     Result.SetSize(GLYPH_SIZE, GLYPH_SIZE);
     // Fuchsia background becomes the transparency mask via AddMasked.
-    Result.Canvas.Brush.Color := clFuchsia;
-    Result.Canvas.Brush.Style := bsSolid;
+    Result.Canvas.Brush.Color:=clFuchsia;
+    Result.Canvas.Brush.Style:=bsSolid;
     Result.Canvas.FillRect(Rect(0, 0, GLYPH_SIZE, GLYPH_SIZE));
-    Result.Canvas.Pen.Color := clBlack;
-    Result.Canvas.Pen.Width := 1;
-    Result.Canvas.Brush.Style := bsClear;
+    Result.Canvas.Pen.Color:=clBlack;
+    Result.Canvas.Pen.Width:=1;
+    Result.Canvas.Brush.Style:=bsClear;
   end;
 
   procedure AddGlyph(B: TBitmap);
@@ -259,66 +261,66 @@ procedure TMHGColumnsEditorForm.BuildGlyphs;
 var
   B: TBitmap;
 begin
-  FGlyphs := TImageList.Create(Self);
-  FGlyphs.Width  := GLYPH_SIZE;
-  FGlyphs.Height := GLYPH_SIZE;
+  FGlyphs:=TImageList.Create(Self);
+  FGlyphs.Width :=GLYPH_SIZE;
+  FGlyphs.Height:=GLYPH_SIZE;
 
   // 0: Add - green plus
-  B := NewGlyph;
-  B.Canvas.Pen.Color := clGreen; B.Canvas.Pen.Width := 2;
-  B.Canvas.MoveTo(8, 3);  B.Canvas.LineTo(8, 13);
-  B.Canvas.MoveTo(3, 8);  B.Canvas.LineTo(13, 8);
+  B:=NewGlyph;
+  B.Canvas.Pen.Color:=clGreen; B.Canvas.Pen.Width:=2;
+  B.Canvas.MoveTo(8, 2);  B.Canvas.LineTo(8, 13);
+  B.Canvas.MoveTo(2, 8);  B.Canvas.LineTo(13, 8);
   AddGlyph(B);
 
   // 1: Delete - red X
-  B := NewGlyph;
-  B.Canvas.Pen.Color := clRed; B.Canvas.Pen.Width := 2;
+  B:=NewGlyph;
+  B.Canvas.Pen.Color:=clRed; B.Canvas.Pen.Width:=2;
   B.Canvas.MoveTo(4, 4);  B.Canvas.LineTo(12, 12);
   B.Canvas.MoveTo(12, 4); B.Canvas.LineTo(4, 12);
   AddGlyph(B);
 
   // 2: Up - filled triangle
-  B := NewGlyph;
-  B.Canvas.Brush.Style := bsSolid; B.Canvas.Brush.Color := clNavy;
-  B.Canvas.Pen.Color := clNavy;
+  B:=NewGlyph;
+  B.Canvas.Brush.Style:=bsSolid; B.Canvas.Brush.Color:=clNavy;
+  B.Canvas.Pen.Color:=clNavy;
   B.Canvas.Polygon([Point(8, 3), Point(13, 11), Point(3, 11)]);
   AddGlyph(B);
 
   // 3: Down - filled triangle
-  B := NewGlyph;
-  B.Canvas.Brush.Style := bsSolid; B.Canvas.Brush.Color := clNavy;
-  B.Canvas.Pen.Color := clNavy;
+  B:=NewGlyph;
+  B.Canvas.Brush.Style:=bsSolid; B.Canvas.Brush.Color:=clNavy;
+  B.Canvas.Pen.Color:=clNavy;
   B.Canvas.Polygon([Point(3, 5), Point(13, 5), Point(8, 13)]);
   AddGlyph(B);
 
   // 4: Copy - two overlapping pages
-  B := NewGlyph;
-  B.Canvas.Pen.Color := clBlack; B.Canvas.Pen.Width := 1;
-  B.Canvas.Brush.Style := bsSolid; B.Canvas.Brush.Color := clWhite;
+  B:=NewGlyph;
+  B.Canvas.Pen.Color:=clBlack; B.Canvas.Pen.Width:=1;
+  B.Canvas.Brush.Style:=bsSolid; B.Canvas.Brush.Color:=clWhite;
   B.Canvas.Rectangle(3, 3, 10, 11);    // back page
   B.Canvas.Rectangle(6, 6, 13, 14);    // front page
   AddGlyph(B);
 
   // 5: Paste - clipboard
-  B := NewGlyph;
-  B.Canvas.Pen.Color := clBlack; B.Canvas.Pen.Width := 1;
-  B.Canvas.Brush.Style := bsSolid; B.Canvas.Brush.Color := $00C8C8C8;
+  B:=NewGlyph;
+  B.Canvas.Pen.Color:=clBlack; B.Canvas.Pen.Width:=1;
+  B.Canvas.Brush.Style:=bsSolid; B.Canvas.Brush.Color:=$00C8C8C8;
   B.Canvas.Rectangle(3, 4, 13, 14);    // board
-  B.Canvas.Brush.Color := clWhite;
+  B.Canvas.Brush.Color:=clWhite;
   B.Canvas.Rectangle(5, 6, 11, 13);    // sheet
-  B.Canvas.Brush.Color := $00808080;
+  B.Canvas.Brush.Color:=$00808080;
   B.Canvas.Rectangle(6, 2, 10, 5);     // clip
   AddGlyph(B);
 
   // 6: Import - database cylinder with a green down arrow (refill from data)
-  B := NewGlyph;
-  B.Canvas.Pen.Color := clBlack; B.Canvas.Pen.Width := 1;
-  B.Canvas.Brush.Style := bsSolid; B.Canvas.Brush.Color := $00E0E0E0;
+  B:=NewGlyph;
+  B.Canvas.Pen.Color:=clBlack; B.Canvas.Pen.Width:=1;
+  B.Canvas.Brush.Style:=bsSolid; B.Canvas.Brush.Color:=$00E0E0E0;
   B.Canvas.Ellipse(2, 2, 10, 5);       // cylinder top
   B.Canvas.Rectangle(2, 3, 10, 10);    // cylinder body
-  B.Canvas.Brush.Color := $00E0E0E0;
+  B.Canvas.Brush.Color:=$00E0E0E0;
   B.Canvas.Ellipse(2, 8, 10, 11);      // cylinder bottom rim
-  B.Canvas.Pen.Color := clGreen; B.Canvas.Pen.Width := 2;
+  B.Canvas.Pen.Color:=clGreen; B.Canvas.Pen.Width:=2;
   B.Canvas.MoveTo(12, 5);  B.Canvas.LineTo(12, 12);    // arrow shaft
   B.Canvas.MoveTo(9, 9);   B.Canvas.LineTo(12, 13);    // arrow head left
   B.Canvas.MoveTo(15, 9);  B.Canvas.LineTo(12, 13);    // arrow head right
@@ -331,16 +333,16 @@ function TMHGColumnsEditorForm.MakeAction(const ACaption: string;
   AGlyph: Integer; AShortCut, AShortCut2: TShortCut;
   AOnExecute, AOnUpdate: TNotifyEvent): TAction;
 begin
-  Result := TAction.Create(FActions);
-  Result.ActionList  := FActions;
-  Result.Caption     := ACaption;
-  Result.Hint        := ACaption;
-  Result.ImageIndex  := AGlyph;
-  Result.ShortCut    := AShortCut;
+  Result:=TAction.Create(FActions);
+  Result.ActionList :=FActions;
+  Result.Caption    :=ACaption;
+  Result.Hint       :=ACaption;
+  Result.ImageIndex :=AGlyph;
+  Result.ShortCut   :=AShortCut;
   if AShortCut2 <> 0 then
     Result.SecondaryShortCuts.Add(ShortCutToText(AShortCut2));
-  Result.OnExecute   := AOnExecute;
-  Result.OnUpdate    := AOnUpdate;
+  Result.OnExecute  :=AOnExecute;
+  Result.OnUpdate   :=AOnUpdate;
 end;
 
 // Builds a compact, action-driven toolbar button. The action supplies the
@@ -353,25 +355,25 @@ var
   Btn: TSpeedButton;
 begin
   Inc(X, AExtraGap);
-  Btn := TSpeedButton.Create(Self);
-  Btn.Parent   := FToolBar;
-  Btn.Flat     := True;
-  Btn.Images   := FGlyphs;
-  Btn.Layout   := blGlyphLeft;
-  Btn.Spacing  := 2;
-  Btn.ShowHint := True;
-  Btn.Action   := AAction;   // caption, glyph index, OnClick, enabled - all via action
+  Btn:=TSpeedButton.Create(Self);
+  Btn.Parent  :=FToolBar;
+  Btn.Flat    :=True;
+  Btn.Images  :=FGlyphs;
+  Btn.Layout  :=blGlyphLeft;
+  Btn.Spacing :=2;
+  Btn.ShowHint:=True;
+  Btn.Action  :=AAction;   // caption, glyph index, OnClick, enabled - all via action
   // Compact width = glyph + spacing + measured caption + small padding.
   // (TSpeedButton.AutoSize and TPanel.Canvas are protected, so we measure on
   // an independent bitmap canvas.)
-  var Measure := TBitmap.Create;
+  var Measure:=TBitmap.Create;
   try
     Measure.Canvas.Font.Assign(Btn.Font);
-    TextW := Measure.Canvas.TextWidth(AAction.Caption);
+    TextW:=Measure.Canvas.TextWidth(AAction.Caption);
   finally
     Measure.Free;
   end;
-  BtnW := GLYPH_SIZE + Btn.Spacing + TextW + 12;
+  BtnW:=GLYPH_SIZE + Btn.Spacing + TextW + 12;
   Btn.SetBounds(X, AY, BtnW, 26);
   Inc(X, Btn.Width + 2);
 end;
@@ -384,28 +386,30 @@ begin
   FList.Items.BeginUpdate;
   try
     FList.Items.Clear;
-    for I := 0 to FCollection.Count - 1 do
-    begin
-      Item := FCollection.Items[I];
+    for I:=0 to FCollection.Count - 1 do begin
+      Item:=FCollection.Items[I];
       FList.Items.Add(Format('%d - %s', [I, Item.DisplayName]));
     end;
   finally
     FList.Items.EndUpdate;
   end;
-  if (KeepIndex >= 0) and (KeepIndex < FList.Items.Count) then
-  begin
+  if (KeepIndex >= 0) and (KeepIndex < FList.Items.Count) then begin
     // In a multi-select listbox, ItemIndex only moves the focus rectangle;
     // it does not select. Select the item too, so SelCount reflects it and
     // the selection-dependent actions (Up/Down/Delete/Copy) stay enabled.
     FList.ClearSelection;
-    FList.Selected[KeepIndex] := True;
-    FList.ItemIndex := KeepIndex;
-  end
-  else if FList.Items.Count > 0 then
-  begin
-    FList.ClearSelection;
-    FList.Selected[0] := True;
-    FList.ItemIndex := 0;
+    FList.Selected[KeepIndex]:=True;
+    FList.ItemIndex:=KeepIndex;
+  end else begin
+    if FList.Items.Count>0 then begin
+      FList.ClearSelection;
+      if KeepIndex>FList.Items.Count-1 then begin
+        FList.ItemIndex:=FList.Items.Count-1;
+      end else begin
+        FList.ItemIndex:=0;
+      end;
+      FList.Selected[FList.ItemIndex]:=True;
+    end;
   end;
 end;
 
@@ -413,23 +417,23 @@ end;
 
 procedure TMHGColumnsEditorForm.UpdHasSel(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := FList.SelCount > 0;
+  (Sender as TAction).Enabled:=FList.SelCount > 0;
 end;
 
 procedure TMHGColumnsEditorForm.UpdUp(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := (FList.SelCount = 1) and (FList.ItemIndex > 0);
+  (Sender as TAction).Enabled:=(FList.SelCount = 1) and (FList.ItemIndex > 0);
 end;
 
 procedure TMHGColumnsEditorForm.UpdDown(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := (FList.SelCount = 1) and
+  (Sender as TAction).Enabled:=(FList.SelCount = 1) and
     (FList.ItemIndex >= 0) and (FList.ItemIndex < FList.Items.Count - 1);
 end;
 
 procedure TMHGColumnsEditorForm.UpdPaste(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := ClipboardHasColumns;
+  (Sender as TAction).Enabled:=ClipboardHasColumns;
 end;
 
 procedure TMHGColumnsEditorForm.UpdImport(Sender: TObject);
@@ -440,16 +444,16 @@ begin
   // fields to import).
   if FGrid is TMultiHeaderDBGrid then
   begin
-    G := TMultiHeaderDBGrid(FGrid);
-    (Sender as TAction).Enabled := (G.DataSet <> nil) and G.DataSet.Active;
+    G:=TMultiHeaderDBGrid(FGrid);
+    (Sender as TAction).Enabled:=(G.DataSet <> nil) and G.DataSet.Active;
   end
   else
-    (Sender as TAction).Enabled := False;
+    (Sender as TAction).Enabled:=False;
 end;
 
 procedure TMHGColumnsEditorForm.UpdHasItems(Sender: TObject);
 begin
-  (Sender as TAction).Enabled := FList.Items.Count > 0;
+  (Sender as TAction).Enabled:=FList.Items.Count > 0;
 end;
 
 procedure TMHGColumnsEditorForm.NotifyModified;
@@ -466,8 +470,8 @@ begin
   // Push the selected column(s) into the Object Inspector so the user can
   // edit their properties while this modeless window stays open.
   if FDesigner = nil then Exit;
-  Comps := CreateSelectionList;
-  for I := 0 to FCollection.Count - 1 do
+  Comps:=CreateSelectionList;
+  for I:=0 to FCollection.Count - 1 do
     if FList.Selected[I] then
       Comps.Add(FCollection.Items[I]);
   if Comps.Count > 0 then
@@ -484,7 +488,7 @@ procedure TMHGColumnsEditorForm.FormClose(Sender: TObject;
 begin
   if not FTearingDown and (OpenEditors <> nil) and (FCollection <> nil) then
     OpenEditors.Remove(FCollection);
-  Action := caFree;
+  Action:=caFree;
 end;
 
 { ---- toolbar actions ----------------------------------------------------- }
@@ -493,7 +497,14 @@ procedure TMHGColumnsEditorForm.DoAdd(Sender: TObject);
 var
   Item: TCollectionItem;
 begin
-  Item := FCollection.Add;
+  FCollection.BeginUpdate;
+  try
+    Item:=FCollection.Add;
+    RefreshList(Item.Index);
+  finally
+    FCollection.EndUpdate;
+  end;
+
   NotifyModified;
   RefreshList(Item.Index);
   SyncInspector;
@@ -504,11 +515,20 @@ var
   I, First: Integer;
 begin
   if FList.SelCount = 0 then Exit;
-  First := FList.ItemIndex;
-  // Delete from the back so indices stay valid.
-  for I := FCollection.Count - 1 downto 0 do
-    if FList.Selected[I] then
-      FCollection.Items[I].Free;
+
+  FCollection.BeginUpdate;
+  try
+    First:=FList.ItemIndex;
+    // Delete from the back so indices stay valid.
+    for I:=FCollection.Count - 1 downto 0 do begin
+      if FList.Selected[I] then begin
+        FCollection.Items[I].Free;
+      end;
+    end;
+  finally
+    FCollection.EndUpdate;
+  end;
+
   NotifyModified;
   RefreshList(First);
   SyncInspector;
@@ -518,9 +538,15 @@ procedure TMHGColumnsEditorForm.DoUp(Sender: TObject);
 var
   Idx: Integer;
 begin
-  Idx := FList.ItemIndex;
-  if Idx <= 0 then Exit;
-  FCollection.Items[Idx].Index := Idx - 1;
+  FCollection.BeginUpdate;
+  try
+    Idx:=FList.ItemIndex;
+    if Idx <= 0 then Exit;
+    FCollection.Items[Idx].Index:=Idx - 1;
+  finally
+    FCollection.EndUpdate;
+  end;
+
   NotifyModified;
   RefreshList(Idx - 1);
   SyncInspector;
@@ -530,9 +556,15 @@ procedure TMHGColumnsEditorForm.DoDown(Sender: TObject);
 var
   Idx: Integer;
 begin
-  Idx := FList.ItemIndex;
-  if (Idx < 0) or (Idx >= FCollection.Count - 1) then Exit;
-  FCollection.Items[Idx].Index := Idx + 1;
+  FCollection.BeginUpdate;
+  try
+    Idx:=FList.ItemIndex;
+    if (Idx < 0) or (Idx >= FCollection.Count - 1) then Exit;
+    FCollection.Items[Idx].Index:=Idx + 1;
+  finally
+    FCollection.EndUpdate;
+  end;
+
   NotifyModified;
   RefreshList(Idx + 1);
   SyncInspector;
@@ -547,25 +579,25 @@ var
   SS: TStringStream;
   I: Integer;
 begin
-  Result := '';
+  Result:='';
   if FList.SelCount = 0 then Exit;
 
-  Carrier := TMHGClipCarrier.Create(nil);
-  Bin := TMemoryStream.Create;
-  Txt := TMemoryStream.Create;
-  SS  := TStringStream.Create('', TEncoding.UTF8);
+  Carrier:=TMHGClipCarrier.Create(nil);
+  Bin:=TMemoryStream.Create;
+  Txt:=TMemoryStream.Create;
+  SS :=TStringStream.Create('', TEncoding.UTF8);
   try
-    Carrier.FItems := TCollection.Create(FItemClass);
+    Carrier.FItems:=TCollection.Create(FItemClass);
     try
-      for I := 0 to FCollection.Count - 1 do
+      for I:=0 to FCollection.Count - 1 do
         if FList.Selected[I] then
           Carrier.FItems.Add.Assign(FCollection.Items[I]);
       Bin.WriteComponent(Carrier);
-      Bin.Position := 0;
+      Bin.Position:=0;
       ObjectBinaryToText(Bin, Txt);
-      Txt.Position := 0;
+      Txt.Position:=0;
       SS.CopyFrom(Txt, Txt.Size);
-      Result := SS.DataString;
+      Result:=SS.DataString;
     finally
       Carrier.FItems.Free;
     end;
@@ -584,22 +616,22 @@ var
   Bytes: TBytes;
   I: Integer;
 begin
-  Result := FList.ItemIndex;
+  Result:=FList.ItemIndex;
   if Trim(AText) = '' then Exit;
 
-  Bytes := TEncoding.UTF8.GetBytes(AText);
-  Carrier := TMHGClipCarrier.Create(nil);
-  Txt := TMemoryStream.Create;
-  Bin := TMemoryStream.Create;
+  Bytes:=TEncoding.UTF8.GetBytes(AText);
+  Carrier:=TMHGClipCarrier.Create(nil);
+  Txt:=TMemoryStream.Create;
+  Bin:=TMemoryStream.Create;
   try
-    Carrier.FItems := TCollection.Create(FItemClass);
+    Carrier.FItems:=TCollection.Create(FItemClass);
     try
       if Length(Bytes) > 0 then
         Txt.WriteBuffer(Bytes[0], Length(Bytes));
-      Txt.Position := 0;
+      Txt.Position:=0;
       try
         ObjectTextToBinary(Txt, Bin);
-        Bin.Position := 0;
+        Bin.Position:=0;
         Bin.ReadComponent(Carrier);
       except
         on E: Exception do
@@ -610,11 +642,11 @@ begin
         end;
       end;
 
-      for I := 0 to Carrier.FItems.Count - 1 do
+      for I:=0 to Carrier.FItems.Count - 1 do
       begin
-        var Dst := FCollection.Add;
+        var Dst:=FCollection.Add;
         Dst.Assign(Carrier.FItems.Items[I]);
-        Result := Dst.Index;
+        Result:=Dst.Index;
       end;
     finally
       Carrier.FItems.Free;
@@ -633,16 +665,16 @@ var
   Data: THandle;
   P: Pointer;
 begin
-  Txt := SelectionToText;
+  Txt:=SelectionToText;
   if Txt = '' then Exit;
 
-  Bytes := TEncoding.UTF8.GetBytes(Txt + #0);
+  Bytes:=TEncoding.UTF8.GetBytes(Txt + #0);
   Clipboard.Open;
   try
-    Data := GlobalAlloc(GMEM_MOVEABLE or GMEM_DDESHARE, Length(Bytes));
+    Data:=GlobalAlloc(GMEM_MOVEABLE or GMEM_DDESHARE, Length(Bytes));
     if Data <> 0 then
     begin
-      P := GlobalLock(Data);
+      P:=GlobalLock(Data);
       try
         if P <> nil then
           Move(Bytes[0], P^, Length(Bytes));
@@ -651,7 +683,7 @@ begin
       end;
       SetClipboardData(MHGClipFormat, Data);
     end;
-    Clipboard.AsText := Txt;   // also CF_TEXT, for paste-as-text anywhere
+    Clipboard.AsText:=Txt;   // also CF_TEXT, for paste-as-text anywhere
   finally
     Clipboard.Close;
   end;
@@ -664,18 +696,18 @@ var
   P: PAnsiChar;
   NewIdx: Integer;
 begin
-  S := '';
+  S:='';
   if Clipboard.HasFormat(MHGClipFormat) then
   begin
     Clipboard.Open;
     try
-      Data := GetClipboardData(MHGClipFormat);
+      Data:=GetClipboardData(MHGClipFormat);
       if Data <> 0 then
       begin
-        P := GlobalLock(Data);
+        P:=GlobalLock(Data);
         try
           if P <> nil then
-            S := UTF8ToString(RawByteString(P));
+            S:=UTF8ToString(RawByteString(P));
         finally
           GlobalUnlock(Data);
         end;
@@ -686,10 +718,10 @@ begin
   end;
 
   if (S = '') and Clipboard.HasFormat(CF_TEXT) then
-    S := Clipboard.AsText;
+    S:=Clipboard.AsText;
   if Trim(S) = '' then Exit;
 
-  NewIdx := AppendFromText(S);
+  NewIdx:=AppendFromText(S);
   NotifyModified;
   RefreshList(NewIdx);
   SyncInspector;
@@ -701,7 +733,7 @@ var
   Before: Integer;
 begin
   if not (FGrid is TMultiHeaderDBGrid) then Exit;
-  G := TMultiHeaderDBGrid(FGrid);
+  G:=TMultiHeaderDBGrid(FGrid);
   if (G.DataSet = nil) or (not G.DataSet.Active) then
   begin
     ShowMessage('Cannot import columns: the grid''s DataSet is not open.');
@@ -711,7 +743,7 @@ begin
   // AutoCreateColumns adds one column per visible field, skipping fields that
   // are already present - so Import both fills an empty grid and tops up a
   // partial one.
-  Before := FCollection.Count;
+  Before:=FCollection.Count;
   G.AutoCreateColumns;
   if FCollection.Count = Before then
   begin
@@ -730,8 +762,8 @@ begin
   if FList.Items.Count = 0 then Exit;
   FList.Items.BeginUpdate;
   try
-    for I := 0 to FList.Items.Count - 1 do
-      FList.Selected[I] := True;
+    for I:=0 to FList.Items.Count - 1 do
+      FList.Selected[I]:=True;
   finally
     FList.Items.EndUpdate;
   end;
@@ -740,7 +772,7 @@ end;
 
 function TMHGColumnsEditorForm.ClipboardHasColumns: Boolean;
 begin
-  Result := Clipboard.HasFormat(MHGClipFormat) or Clipboard.HasFormat(CF_TEXT);
+  Result:=Clipboard.HasFormat(MHGClipFormat) or Clipboard.HasFormat(CF_TEXT);
 end;
 
 { ---- show helper: one modeless instance per collection ------------------- }
@@ -752,7 +784,7 @@ var
   F: TMHGColumnsEditorForm;
 begin
   if OpenEditors = nil then
-    OpenEditors := TDictionary<TCollection, TMHGColumnsEditorForm>.Create;
+    OpenEditors:=TDictionary<TCollection, TMHGColumnsEditorForm>.Create;
 
   if OpenEditors.TryGetValue(ACollection, F) then
   begin
@@ -761,7 +793,7 @@ begin
     Exit;
   end;
 
-  F := TMHGColumnsEditorForm.CreateEditor(ADesigner, AGrid, ACollection,
+  F:=TMHGColumnsEditorForm.CreateEditor(ADesigner, AGrid, ACollection,
          AItemClass, ACaption);
   OpenEditors.Add(ACollection, F);
   F.Show;   // modeless - Object Inspector stays usable (request #4)
@@ -777,14 +809,6 @@ type
     procedure Edit; override;
   end;
 
-  TMHGDBGridEditor = class(TComponentEditor)
-  public
-    procedure Edit; override;
-    function GetVerbCount: Integer; override;
-    function GetVerb(Index: Integer): string; override;
-    procedure ExecuteVerb(Index: Integer); override;
-  end;
-
   TMHGGridEditor = class(TComponentEditor)
   public
     procedure Edit; override;
@@ -793,126 +817,100 @@ type
     procedure ExecuteVerb(Index: Integer); override;
   end;
 
-procedure EditDBColumns(const ADesigner: IDesigner; AGrid: TMultiHeaderDBGrid);
+procedure EditColumns(const ADesigner: IDesigner; AGrid: TMultiHeaderGrid);
 begin
-  ShowColumnsEditor(ADesigner, AGrid, AGrid.Columns, TMHGColumn,
+  // One entry point for the whole family: the collection lives on the base
+  // grid and already carries the right item class (TMHGDBColumn on the DB grid,
+  // TMHGHeaderColumn otherwise).
+  ShowColumnsEditor(ADesigner, AGrid, AGrid.Columns, AGrid.Columns.ItemClass,
     Format('Editing %s.Columns', [AGrid.Name]));
-end;
-
-procedure EditHeaderColumns(const ADesigner: IDesigner; AGrid: TMultiHeaderGrid);
-begin
-  ShowColumnsEditor(ADesigner, AGrid, AGrid.HeaderColumns, TMHGHeaderColumn,
-    Format('Editing %s.HeaderColumns', [AGrid.Name]));
 end;
 
 { TMHGColumnsProperty }
 
 function TMHGColumnsProperty.GetAttributes: TPropertyAttributes;
 begin
-  Result := [paDialog, paReadOnly];
+  Result:=[paDialog, paReadOnly];
 end;
 
 function TMHGColumnsProperty.GetValue: string;
 begin
-  Result := '(MultiHeaderGrid Columns)';
+  Result:='(MultiHeaderGrid Columns)';
 end;
 
 procedure TMHGColumnsProperty.Edit;
 var
   Comp: TPersistent;
 begin
-  Comp := GetComponent(0);
-  if Comp is TMultiHeaderDBGrid then
-    EditDBColumns(Designer, TMultiHeaderDBGrid(Comp))
-  else if Comp is TMultiHeaderGrid then
-    EditHeaderColumns(Designer, TMultiHeaderGrid(Comp));
-end;
-
-{ TMHGDBGridEditor }
-
-procedure TMHGDBGridEditor.Edit;
-begin
-  EditDBColumns(Designer, Component as TMultiHeaderDBGrid);
-end;
-
-function TMHGDBGridEditor.GetVerbCount: Integer;
-begin
-  Result := 2;
-end;
-
-function TMHGDBGridEditor.GetVerb(Index: Integer): string;
-begin
-  case Index of
-    0: Result := 'Edit Columns...';
-    1: Result := 'Auto Create Columns';
-  else
-    Result := '';
-  end;
-end;
-
-procedure TMHGDBGridEditor.ExecuteVerb(Index: Integer);
-var
-  Grid: TMultiHeaderDBGrid;
-begin
-  Grid := Component as TMultiHeaderDBGrid;
-  case Index of
-    0: EditDBColumns(Designer, Grid);
-    1: begin
-         Grid.AutoCreateColumns;
-         if Designer <> nil then Designer.Modified;
-       end;
-  end;
+  Comp:=GetComponent(0);
+  if Comp is TMultiHeaderGrid then
+    EditColumns(Designer, TMultiHeaderGrid(Comp));
 end;
 
 { TMHGGridEditor }
 
 procedure TMHGGridEditor.Edit;
 begin
-  EditHeaderColumns(Designer, Component as TMultiHeaderGrid);
+  EditColumns(Designer, Component as TMultiHeaderGrid);
 end;
 
 function TMHGGridEditor.GetVerbCount: Integer;
 begin
-  Result := 1;
+  // "Auto Create Columns" needs a DataSet, so it is offered on the DB grid only.
+  if Component is TMultiHeaderDBGrid then
+    Result:=2
+  else
+    Result:=1;
 end;
 
 function TMHGGridEditor.GetVerb(Index: Integer): string;
 begin
-  if Index = 0 then Result := 'Edit Header...' else Result := '';
+  case Index of
+    0: Result:='Edit Columns...';
+    1: Result:='Auto Create Columns';
+  else
+    Result:='';
+  end;
 end;
 
 procedure TMHGGridEditor.ExecuteVerb(Index: Integer);
 begin
-  if Index = 0 then
-    EditHeaderColumns(Designer, Component as TMultiHeaderGrid);
+  case Index of
+    0: EditColumns(Designer, Component as TMultiHeaderGrid);
+    1: begin
+         (Component as TMultiHeaderDBGrid).AutoCreateColumns;
+         if Designer <> nil then Designer.Modified;
+       end;
+  end;
 end;
 
 { ---- registration -------------------------------------------------------- }
 
 procedure Register;
 begin
-  RegisterComponentEditor(TMultiHeaderDBGrid, TMHGDBGridEditor);
-  RegisterPropertyEditor(TypeInfo(TMHGColumns), TMultiHeaderDBGrid,
-                         'Columns', TMHGColumnsProperty);
-
+  // Registering on the base class covers TMultiHeaderStringGrid and
+  // TMultiHeaderDBGrid as well.
   RegisterComponentEditor(TMultiHeaderGrid, TMHGGridEditor);
-  RegisterComponentEditor(TMultiHeaderStringGrid, TMHGGridEditor);
-  RegisterPropertyEditor(TypeInfo(TMHGHeaderColumns), TMultiHeaderGrid,
-                         'HeaderColumns', TMHGColumnsProperty);
+  RegisterPropertyEditor(TypeInfo(TMHGColumns), TMultiHeaderGrid,
+                         'Columns', TMHGColumnsProperty);
+  // The DB grid redeclares Columns with its own collection type, whose type
+  // info differs from the base property's and needs its own registration.
+  RegisterPropertyEditor(TypeInfo(TMHGDBColumns), TMultiHeaderDBGrid,
+                         'Columns', TMHGColumnsProperty);
 end;
 
 initialization
-  MHGClipFormat := RegisterClipboardFormat(MHG_CLIP_FORMAT_NAME);
+  MHGClipFormat:=RegisterClipboardFormat(MHG_CLIP_FORMAT_NAME);
 finalization
   if OpenEditors <> nil then
   begin
     // Detach from the registry first (FormClose would otherwise mutate the
     // dictionary while we iterate), then free the still-open windows.
-    var Forms := OpenEditors.Values.ToArray;
+    var Forms:=OpenEditors.Values.ToArray;
     OpenEditors.Clear;
     for var F in Forms do
     begin
-      F.FTearingDown := True;
+      F.FTearingDown:=True;
       F.Free;
     end;
     FreeAndNil(OpenEditors);

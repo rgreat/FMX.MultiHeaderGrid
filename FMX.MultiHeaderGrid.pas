@@ -174,12 +174,12 @@ type
   end;
 
   TMultiHeaderGrid = class;
-  TMHGHeaderColumns = class;
+  TMHGColumns = class;
 
   // Base, non-data-bound column descriptor shared by all grids. Carries
   // everything needed to build a (possibly grouped, multi-row) header and
   // to lay out a column: Title, GroupHeader/Separator, widths, word wrap
-  // and the four alignments. The data-bound TMHGColumn (DB grid) extends
+  // and the four alignments. The data-bound TMHGDBColumn (DB grid) extends
   // this with FieldName and per-column data Color.
   TMHGHeaderColumn = class(TCollectionItem)
   private
@@ -240,7 +240,7 @@ type
     property GroupHeaderSeparator: Char read FGroupHeaderSeparator write SetGroupHeaderSeparator default ';';
   end;
 
-  TMHGHeaderColumns = class(TOwnedCollection)
+  TMHGColumns = class(TOwnedCollection)
   private
     FGrid: TMultiHeaderGrid;
     function GetItem(Index: Integer): TMHGHeaderColumn;
@@ -248,9 +248,8 @@ type
   protected
     procedure Update(Item: TCollectionItem); override;
   public
-    // AItemClass lets the data-bound TMHGColumns reuse this collection
-    // with its richer item class (TMHGColumn) without a virtual call
-    // during construction.
+    // AItemClass lets the descendant TMHGDBColumns (DB grid) run this
+    // collection with its richer item class (TMHGColumn).
     constructor Create(AGrid: TMultiHeaderGrid;
                        AItemClass: TCollectionItemClass = nil); reintroduce; overload;
     function Add: TMHGHeaderColumn;
@@ -399,8 +398,8 @@ type
       // columns proportionally toward their word-width floor to fit. When off,
       // columns are sized to word width regardless of available space.
       FConservativeWrap: Boolean;
-      FHeaderColumns: TMHGHeaderColumns;
-      FRebuildingHeaderColumns: Boolean;
+      FColumns: TMHGColumns;
+      FRebuildingColumns: Boolean;
       // Raised by bulk operations (header/column rebuilds) that apply word-wrap
       // to many columns at once, so the per-setter row re-fit doesn't run once
       // per column. The caller does a single sizing pass when finished.
@@ -452,13 +451,11 @@ type
 
     function ResizeStartWidth: Integer;
     procedure SetHeaderWordWrap(const Value: Boolean);
-    procedure SetHeaderColumns(const Value: TMHGHeaderColumns);
+    procedure SetColumns(const Value: TMHGColumns);
     // Builds a (possibly grouped, multi-row) header + applies column
-    // geometry/alignment/wordwrap from a TMHGHeaderColumns collection.
-    // Shared by the base grid (HeaderColumns) and reused conceptually by
-    // the DB grid. AVisible returns the visible items in order.
+    // geometry/alignment/wordwrap from a TMHGColumns collection.
     procedure BuildHeaderFromColumns(const ACols: array of TMHGHeaderColumn);
-    procedure RebuildFromHeaderColumns;
+    procedure RebuildFromColumns;
     // True when wrapping applies to the header element at (ALevel,ACol).
     function HeaderCellWordWrap(AElement: THeaderElement): Boolean;
     // Effective word-wrap for a data cell, matching the cell-draw logic
@@ -511,6 +508,16 @@ type
     // measure the live editor rather than the stored cell text.
     procedure MemoEditorTextChanged(Sender: TObject);
   protected
+    // --- Columns extensibility hooks -------------------------------------
+    // Factory for the Columns collection, called once from the constructor.
+    // The base grid creates a plain TMHGColumns collection; the DB grid
+    // overrides it to create TMHGColumns (items carry FieldName, Color, ...).
+    function  CreateColumns: TMHGColumns; virtual;
+    // Notification from the Columns collection on any add/remove/reorder/
+    // property change. The base grid rebuilds the header from the collection;
+    // the DB grid defers a full table rebuild instead.
+    procedure ColumnsChanged; virtual;
+
     // --- Inplace editor extensibility hooks -----------------------------
     // The base/string grids always edit through the shared TMemo (FEditor).
     // The DB grid overrides these to select a typed editor control per field
@@ -882,11 +889,12 @@ type
     // Maximum width of the column for autowidth computing
     // Can be overriden by MaxWidth property of  the column.
     property MaxColumnAutoWidth: integer read FMaxColumnAutoWidth write FMaxColumnAutoWidth default 400;
-    // Declarative header/column definitions for the non-data-bound grids.
-    // When populated they build the (grouped) header and set column
-    // widths/alignment/word wrap. When empty the grid keeps whatever
-    // header was created procedurally via Header.AddRow.
-    property HeaderColumns: TMHGHeaderColumns read FHeaderColumns write SetHeaderColumns;
+    // Declarative header/column definitions. When populated they build the
+    // (grouped) header and set column widths/alignment/word wrap. When empty
+    // the grid keeps whatever header was created procedurally via
+    // Header.AddRow. TMultiHeaderDBGrid redeclares this property with its
+    // data-bound collection type (TMHGColumns).
+    property Columns: TMHGColumns read FColumns write SetColumns;
 
     property HorisontalScroll: TScrollShowMode read FHorisontalScroll write SetHorisontalScroll default TScrollShowMode.smAuto;
     property VerticalScroll: TScrollShowMode read FVerticalScroll write SetVerticalScroll default TScrollShowMode.smAuto;
@@ -940,7 +948,7 @@ type
   end;
 
   TMultiHeaderDBGrid = class;
-  TMHGColumns = class;
+  TMHGDBColumns = class;
 
   // Single column of TMultiHeaderDBGrid. Extends the shared
   // TMHGHeaderColumn (Title, GroupHeader, widths, alignments, word wrap)
@@ -989,13 +997,11 @@ type
     property DisplayFormat: string read FDisplayFormat write SetDisplayFormat;
   end;
 
-  TMHGColumns = class(TOwnedCollection)
+  TMHGDBColumns = class(TMHGColumns)
   private
-    FGrid: TMultiHeaderDBGrid;
+    function GetGrid: TMultiHeaderDBGrid;
     function GetItem(Index: Integer): TMHGColumn;
     procedure SetItem(Index: Integer; const Value: TMHGColumn);
-  protected
-    procedure Update(Item: TCollectionItem); override;
   public
     constructor Create(AGrid: TMultiHeaderDBGrid);
 
@@ -1016,7 +1022,7 @@ type
                             AMinWidth: Integer = -1;
                             AMaxWidth: Integer = -1): TMHGColumn;
 
-    property Grid: TMultiHeaderDBGrid read FGrid;
+    property Grid: TMultiHeaderDBGrid read GetGrid;
     property Items[Index: Integer]: TMHGColumn read GetItem write SetItem; default;
   end;
 
@@ -1105,7 +1111,6 @@ type
       FEndFetching: Boolean;
       FEndFetchCancelled: Boolean;
       FEndSynthetic: Boolean;
-      FColumns: TMHGColumns;
       // Grid-wide default formats for the field -> cell-string conversion of
       // date / time / datetime fields, used when a column has no explicit
       // DisplayFormat. Passed to FormatDateTime. Defaults: 'DD.MM.YYYY' and
@@ -1154,7 +1159,8 @@ type
     function GetDataSource: TDataSource;
     procedure SetDataSource(const Value: TDataSource);
     procedure SetRowCacheSize(const Value: integer);
-    procedure SetColumns(const Value: TMHGColumns);
+    function GetColumns: TMHGDBColumns;
+    procedure SetColumns(const Value: TMHGDBColumns);
     procedure SetDateFormat(const Value: string);
     procedure SetTimeFormat(const Value: string);
     // Converts a field's value to its displayed cell string, applying the
@@ -1194,6 +1200,10 @@ type
     // during dsInsert. -1 if unknown.
     function  CurrentRowIndex: Integer;
   protected
+    // Columns hooks: the collection is TMHGDBColumns (items TMHGColumn) and any
+    // collection change defers one coalesced table rebuild.
+    function CreateColumns: TMHGColumns; override;
+    procedure ColumnsChanged; override;
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
     procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
     procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
@@ -1372,7 +1382,7 @@ type
     // collection means an empty grid - use AutoCreateColumns (or the
     // design-time editor's Import button) to (re)populate it from the
     // DataSet's visible fields.
-    property Columns: TMHGColumns read FColumns write SetColumns;
+    property Columns: TMHGDBColumns read GetColumns write SetColumns;
   end;
 
 procedure Register;
@@ -1404,9 +1414,9 @@ const
 
 procedure Register;
 begin
-  RegisterComponents('FMX', [TMultiHeaderGrid]);
-  RegisterComponents('FMX', [TMultiHeaderStringGrid]);
-  RegisterComponents('FMX', [TMultiHeaderDBGrid]);
+  RegisterComponents('Grids', [TMultiHeaderGrid]);
+  RegisterComponents('Grids', [TMultiHeaderStringGrid]);
+  RegisterComponents('Grids', [TMultiHeaderDBGrid]);
 end;
 
 { THeaderElement }
@@ -1727,9 +1737,9 @@ begin
   end;
 end;
 
-{ TMHGHeaderColumns }
+{ TMHGColumns }
 
-constructor TMHGHeaderColumns.Create(AGrid: TMultiHeaderGrid;
+constructor TMHGColumns.Create(AGrid: TMultiHeaderGrid;
   AItemClass: TCollectionItemClass = nil);
 begin
   if AItemClass=nil then AItemClass:=TMHGHeaderColumn;
@@ -1737,28 +1747,28 @@ begin
   FGrid:=AGrid;
 end;
 
-function TMHGHeaderColumns.GetItem(Index: Integer): TMHGHeaderColumn;
+function TMHGColumns.GetItem(Index: Integer): TMHGHeaderColumn;
 begin
   Result:=TMHGHeaderColumn(inherited Items[Index]);
 end;
 
-procedure TMHGHeaderColumns.SetItem(Index: Integer; const Value: TMHGHeaderColumn);
+procedure TMHGColumns.SetItem(Index: Integer; const Value: TMHGHeaderColumn);
 begin
   inherited Items[Index]:=Value;
 end;
 
-procedure TMHGHeaderColumns.Update(Item: TCollectionItem);
+procedure TMHGColumns.Update(Item: TCollectionItem);
 begin
   inherited;
-  if FGrid<>nil then FGrid.RebuildFromHeaderColumns;
+  if FGrid<>nil then FGrid.ColumnsChanged;
 end;
 
-function TMHGHeaderColumns.Add: TMHGHeaderColumn;
+function TMHGColumns.Add: TMHGHeaderColumn;
 begin
   Result:=TMHGHeaderColumn(inherited Add);
 end;
 
-function TMHGHeaderColumns.AddColumn(const ATitle, AGroupHeader: string): TMHGHeaderColumn;
+function TMHGColumns.AddColumn(const ATitle, AGroupHeader: string): TMHGHeaderColumn;
 begin
   BeginUpdate;
   try
@@ -1788,7 +1798,7 @@ begin
   FGridLines:=True;
   FHeaderWordWrap:=True;
   FConservativeWrap:=True;
-  FHeaderColumns:=TMHGHeaderColumns.Create(Self);
+  FColumns:=CreateColumns;
   FGridLineColor:=TAlphaColors.Gray;
   FHeaderLineColor:=TAlphaColors.Black;
   FGridLineWidth:=1;
@@ -1895,7 +1905,7 @@ begin
   ReleaseCapture;
 
   FHeaderLevels.Free;
-  FHeaderColumns.Free;
+  FColumns.Free;
   FCellFont.Free;
   FHeaderFont.Free;
   FCellPadding.Free;
@@ -3015,43 +3025,53 @@ begin
   end;
 end;
 
-procedure TMultiHeaderGrid.SetHeaderColumns(const Value: TMHGHeaderColumns);
+procedure TMultiHeaderGrid.SetColumns(const Value: TMHGColumns);
 begin
-  FHeaderColumns.Assign(Value);
+  FColumns.Assign(Value);
 end;
 
-procedure TMultiHeaderGrid.RebuildFromHeaderColumns;
-// Re-applies the HeaderColumns collection to the grid. When empty the
+function TMultiHeaderGrid.CreateColumns: TMHGColumns;
+begin
+  Result:=TMHGColumns.Create(Self);
+end;
+
+procedure TMultiHeaderGrid.ColumnsChanged;
+begin
+  RebuildFromColumns;
+end;
+
+procedure TMultiHeaderGrid.RebuildFromColumns;
+// Re-applies the Columns collection to the grid. When empty the
 // procedural header (Header.AddRow...) is left untouched.
 begin
-  if FRebuildingHeaderColumns then Exit;
-  if FHeaderColumns=nil then Exit;
-  if FHeaderColumns.Count=0 then Exit;
+  if FRebuildingColumns then Exit;
+  if FColumns=nil then Exit;
+  if FColumns.Count=0 then Exit;
 
-  FRebuildingHeaderColumns:=True;
+  FRebuildingColumns:=True;
   try
     // Gather visible items in order.
     var Vis: array of TMHGHeaderColumn;
-    SetLength(Vis,FHeaderColumns.Count);
+    SetLength(Vis,FColumns.Count);
     var Cnt:=0;
-    for var i:=0 to FHeaderColumns.Count-1 do
-      if FHeaderColumns[i].Visible then begin
-        Vis[Cnt]:=FHeaderColumns[i];
+    for var i:=0 to FColumns.Count-1 do
+      if FColumns[i].Visible then begin
+        Vis[Cnt]:=FColumns[i];
         Inc(Cnt);
       end;
     SetLength(Vis,Cnt);
 
     BuildHeaderFromColumns(Vis);
   finally
-    FRebuildingHeaderColumns:=False;
+    FRebuildingColumns:=False;
   end;
 end;
 
 procedure TMultiHeaderGrid.BuildHeaderFromColumns(const ACols: array of TMHGHeaderColumn);
 // Builds a (possibly grouped, multi-row) header from a flat list of
 // header columns and applies their geometry / alignment / word wrap.
-// This is the shared grouping algorithm used by both the non-data-bound
-// grids (HeaderColumns) and, conceptually, the DB grid. Every group row
+// This is the shared grouping algorithm behind RebuildFromColumns. The DB
+// grid builds its header separately (BuildGroupedHeader). Every group row
 // is fully tiled (one element per column position) so the header model's
 // left-to-right accumulation stays perfectly column-aligned.
 var
@@ -6428,8 +6448,8 @@ end;
 
 function TMHGColumn.GetGrid: TMultiHeaderDBGrid;
 begin
-  if Collection is TMHGColumns then
-    Result:=TMHGColumns(Collection).Grid
+  if Collection is TMHGDBColumns then
+    Result:=TMHGDBColumns(Collection).Grid
   else
     Result:=nil;
 end;
@@ -6482,40 +6502,34 @@ begin
   end;
 end;
 
-{ TMHGColumns }
+{ TMHGDBColumns }
 
-constructor TMHGColumns.Create(AGrid: TMultiHeaderDBGrid);
+constructor TMHGDBColumns.Create(AGrid: TMultiHeaderDBGrid);
 begin
   inherited Create(AGrid, TMHGColumn);
-  FGrid:=AGrid;
 end;
 
-function TMHGColumns.GetItem(Index: Integer): TMHGColumn;
+function TMHGDBColumns.GetGrid: TMultiHeaderDBGrid;
+begin
+  Result:=TMultiHeaderDBGrid(inherited Grid);
+end;
+
+function TMHGDBColumns.GetItem(Index: Integer): TMHGColumn;
 begin
   Result:=TMHGColumn(inherited Items[Index]);
 end;
 
-procedure TMHGColumns.SetItem(Index: Integer; const Value: TMHGColumn);
+procedure TMHGDBColumns.SetItem(Index: Integer; const Value: TMHGColumn);
 begin
   inherited Items[Index]:=Value;
 end;
 
-procedure TMHGColumns.Update(Item: TCollectionItem);
-begin
-  inherited;
-  // Any add/remove/reorder/property change rebuilds the grid header. Defer and
-  // coalesce: a burst of changes (e.g. setting Min/MaxWidth on several columns)
-  // then costs one rebuild, flushed before the next paint.
-  if FGrid<>nil then
-    FGrid.InvalidateTable;
-end;
-
-function TMHGColumns.Add: TMHGColumn;
+function TMHGDBColumns.Add: TMHGColumn;
 begin
   Result:=TMHGColumn(inherited Add);
 end;
 
-function TMHGColumns.AddColumn(const AFieldName: string;
+function TMHGDBColumns.AddColumn(const AFieldName: string;
                                const ATitle: string = '';
                                const AGroupHeader: string = ''): TMHGColumn;
 begin
@@ -6530,7 +6544,7 @@ begin
   end;
 end;
 
-function TMHGColumns.FindByFieldName(const AFieldName: string): TMHGColumn;
+function TMHGDBColumns.FindByFieldName(const AFieldName: string): TMHGColumn;
 begin
   for var i:=0 to Count-1 do begin
     if SameText(Items[i].FieldName,AFieldName) then Exit(Items[i]);
@@ -6538,7 +6552,7 @@ begin
   Result:=nil;
 end;
 
-function TMHGColumns.SetColumnProps(const AFieldName: string;
+function TMHGDBColumns.SetColumnProps(const AFieldName: string;
                                     const ATitle: string;
                                     const AGroupHeader: string = '';
                                     AWidth: Integer = -1;
@@ -6756,14 +6770,12 @@ begin
   FTimeFormat:='HH:NN:SS';
   FCellTexts:=TRowsData.Create(FRowCacheSize);
   FDataLink:=TMHGDataLink.Create(Self);
-  FColumns:=TMHGColumns.Create(Self);
 end;
 
 destructor TMultiHeaderDBGrid.Destroy;
 begin
   FDataLink.Free;
   FCellTexts.Free;
-  FColumns.Free;
 
   inherited;
 end;
@@ -6922,9 +6934,27 @@ begin
   Result:=FDataLink.DataSource;
 end;
 
-procedure TMultiHeaderDBGrid.SetColumns(const Value: TMHGColumns);
+function TMultiHeaderDBGrid.GetColumns: TMHGDBColumns;
+begin
+  Result:=TMHGDBColumns(FColumns);
+end;
+
+procedure TMultiHeaderDBGrid.SetColumns(const Value: TMHGDBColumns);
 begin
   FColumns.Assign(Value);
+end;
+
+function TMultiHeaderDBGrid.CreateColumns: TMHGColumns;
+begin
+  Result:=TMHGDBColumns.Create(Self);
+end;
+
+procedure TMultiHeaderDBGrid.ColumnsChanged;
+begin
+  // Any add/remove/reorder/property change rebuilds the grid header. Defer and
+  // coalesce: a burst of changes (e.g. setting Min/MaxWidth on several columns)
+  // then costs one rebuild, flushed before the next paint.
+  InvalidateTable;
 end;
 
 function TMultiHeaderDBGrid.ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
@@ -6942,11 +6972,11 @@ begin
 
   // Columns-driven, always. Skip invisible columns and columns whose
   // FieldName does not resolve to a real field.
-  SetLength(Result,FColumns.Count);
-  SetLength(AFields,FColumns.Count);
+  SetLength(Result,Columns.Count);
+  SetLength(AFields,Columns.Count);
   var Cnt:=0;
-  for var i:=0 to FColumns.Count-1 do begin
-    var Col:=FColumns[i];
+  for var i:=0 to Columns.Count-1 do begin
+    var Col:=Columns[i];
     if not Col.Visible then Continue;
     var F:=DS.FindField(Col.FieldName);
     if F=nil then Continue;
@@ -7365,16 +7395,16 @@ begin
     // fields shared by both tables would otherwise keep their old (earlier)
     // collection index and stay in front of the new table's columns. Clear
     // them so AutoCreateColumns rebuilds in the NEW table's field order.
-    FColumns.BeginUpdate;
+    Columns.BeginUpdate;
     try
-      FColumns.Clear;
+      Columns.Clear;
     finally
-      FColumns.EndUpdate;
+      Columns.EndUpdate;
     end;
     AutoCreateColumns; // rebuilds via the collection's Update -> ResetTable
     // If the table genuinely had no visible fields, AutoCreateColumns adds
     // nothing and no rebuild is triggered; ensure the grid is still reset.
-    if FColumns.Count=0 then ResetTable;
+    if Columns.Count=0 then ResetTable;
   end else begin
     // Remember the current table so a later delete-all on it stays empty.
     FLastAutoSig:=Sig;
@@ -7387,16 +7417,16 @@ begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
 
-  FColumns.BeginUpdate;
+  Columns.BeginUpdate;
   try
     for var i:=0 to DS.FieldCount-1 do begin
       var F:=DS.Fields[i];
       if not F.Visible then Continue;
-      if FColumns.FindByFieldName(F.FieldName)=nil then
-        FColumns.AddColumn(F.FieldName,F.DisplayLabel);
+      if Columns.FindByFieldName(F.FieldName)=nil then
+        Columns.AddColumn(F.FieldName,F.DisplayLabel);
     end;
   finally
-    FColumns.EndUpdate;
+    Columns.EndUpdate;
   end;
 end;
 
@@ -7857,9 +7887,9 @@ function TMultiHeaderDBGrid.ColumnForField(Field: TField): TMHGColumn;
 begin
   Result:=nil;
   if Field=nil then Exit;
-  for var i:=0 to FColumns.Count-1 do
-    if SameText(FColumns[i].FieldName, Field.FieldName) then
-      Exit(FColumns[i]);
+  for var i:=0 to Columns.Count-1 do
+    if SameText(Columns[i].FieldName, Field.FieldName) then
+      Exit(Columns[i]);
 end;
 
 procedure TMultiHeaderDBGrid.OnDateEditorClear(Sender: TObject);
