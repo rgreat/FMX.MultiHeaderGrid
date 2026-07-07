@@ -445,6 +445,10 @@ type
       // synchronous on-demand grow; the DB descendant pages to Eof separately.
       FEndJump: boolean;
       FMaxColumnAutoWidth: integer;
+      FFetchesOnDemand: Boolean;            // cached: dataset fetches rows lazily (FetchOptions.Mode)
+      // Grid would automatically try to keep rows & columns autsized to fit data
+      FKeepRowsAutoSized: Boolean;
+      FKeepColumnsAutoSized: Boolean;
 
     function ResizeStartWidth: Integer;
     procedure SetHeaderWordWrap(const Value: Boolean);
@@ -644,6 +648,9 @@ type
     procedure SetColWordWrap(Index: Integer; const Value: Boolean);
     procedure SetWordWrap(const Value: Boolean);
     procedure SetConservativeWrap(const Value: Boolean);
+    procedure SetKeepColumnsAutoSized(const Value: Boolean);
+    procedure SetKeepRowsAutoSized(const Value: Boolean);
+
     // ConservativeWrap helper: after AutoSizeCols has sized wrapped columns to
     // their word width, redistribute against the viewport - give spare width
     // back to wrapped columns (up to their natural one-line width), or shrink
@@ -703,10 +710,6 @@ type
     procedure EnsureRowAvailable(ARow: Integer); virtual;
     // True only while AutoSizeRows runs (read by row-provider descendants).
     function  InLayout: Boolean;
-    // Upper row bound (exclusive) for the AutoSizeCols content scan. A base grid
-    // scans all rows; a row-provider descendant overrides this to the rows it has
-    // available so auto-fit does not force the whole set to be provided.
-    function  ColScanRowLimit: Integer; virtual;
     procedure DoGridScroll; virtual;
 
     procedure MouseDown(Button: TMouseButton; Shift: TShiftState; X, Y: Single); override;
@@ -730,7 +733,11 @@ type
     procedure UnMergeCells(ACol, ARow: Integer);
     procedure ClearMergedCells;
 
-    procedure AutoSizeCols;
+    procedure AutoSize(Precision: TResizeQuality = rqNoChange);
+
+    procedure AutoSizeCols(IncreaseOnly: boolean = False; FirstRow: integer = -1; LastRow : integer = -1);
+
+    procedure AutoSizeVisibleCols;
 
     procedure AutoSizeRows(FromRow: integer = 0; ToRow: integer = -1;
                            FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1;
@@ -740,7 +747,6 @@ type
     // Sizes each header level's height to fit its (optionally wrapped or
     // multi-line) captions. Shared by all grid descendants.
     procedure AutoSizeHeaders;
-    procedure AutoSize(Precision: TResizeQuality = rqNoChange);
 
     procedure ClearSelection;
 
@@ -869,6 +875,10 @@ type
     // When set, header captions wrap to the cell width during drawing and
     // are accounted for by AutoSizeHeaders. On by default.
     property HeaderWordWrap: Boolean read FHeaderWordWrap write SetHeaderWordWrap default True;
+    // Grid would automatically try to keep rows & columns autsized to fit data
+    property KeepColumnsAutoSized: Boolean read FKeepColumnsAutoSized write SetKeepColumnsAutoSized default True;
+    property KeepRowsAutoSized: Boolean read FKeepRowsAutoSized write SetKeepRowsAutoSized default True;
+
     // Maximum width of the column for autowidth computing
     // Can be overriden by MaxWidth property of  the column.
     property MaxColumnAutoWidth: integer read FMaxColumnAutoWidth write FMaxColumnAutoWidth default 400;
@@ -1079,7 +1089,6 @@ type
       // fmOnDemand), RecordCount only counts rows fetched so far, so the cursor
       // is stepped with Next (bounded by Eof) as the grid navigates/scrolls to
       // materialize more rows. Fully-materialized cursors need no growth.
-      FFetchesOnDemand: Boolean;            // cached: dataset fetches rows lazily (FetchOptions.Mode)
       FInUpdateRowCount: Boolean;           // re-entrancy guard for UpdateRowCount
       // Re-entrancy guard for native-path live growth (stepping the cursor with
       // Next fires DataSetScrolled/-Changed -> UpdateRowCount).
@@ -1194,7 +1203,6 @@ type
     // dataset, growing RowCount as the grid navigates/scrolls/scans.
     procedure DoGridScroll; override;
     procedure EnsureRowAvailable(ARow: Integer); override;
-    function  ColScanRowLimit: Integer; override;
     // End-key handling and on-demand End-fetch cancellation live here (not in the
     // base, which is dataset-agnostic): End on an on-demand cursor pages to Eof,
     // cancellable by any other key or a mouse click.
@@ -1786,6 +1794,8 @@ begin
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
   FMaxColumnAutoWidth:=400;
+  FKeepRowsAutoSized:=True;
+  FKeepColumnsAutoSized:=True;
 
   Margins.Rect:=RectF(4,4,4,4);
 
@@ -2104,6 +2114,9 @@ begin
     if FColData[Index].MinWidth>0 then begin
       FColData[Index].Widths:=Max(FColData[Index].Widths,FColData[Index].MinWidth);
     end;
+    for var i:=0 to High(FRowData) do begin
+      if FRowData[i].AutoSized then FRowData[i].AutoSized:=False;
+    end;
     UpdateSize;
     Invalidate;
   end;
@@ -2387,7 +2400,11 @@ begin
       Canvas.Fill.Kind:=TBrushKind.Solid;
       Canvas.Fill.Color:=FBackgroundColor;
 
-      if WordWrap then begin
+      if FKeepColumnsAutoSized and FFetchesOnDemand then begin
+        AutoSizeVisibleCols;
+      end;
+
+      if FKeepRowsAutoSized and WordWrap then begin
         AutoSizeVisibleRows;
       end;
 
@@ -2430,6 +2447,8 @@ begin
       // hairlines and lets the title text centre over the full height.
       if not HeaderCellIsFiller(i, j+Element.ColSkip) then
         DrawHeaderCell(Canvas, i, j+Element.ColSkip);
+      var ColSpan:=Element.ColSpan;
+      if ColSpan<0 then ColSpan:=FColCount-i;
       j:=j+Element.ColSpan;
     end;
   end;
@@ -2984,7 +3003,7 @@ begin
   end;
 
   AutoSizeCols;
-  AutoSizeRows;
+  AutoSizeVisibleRows;
   UpdateSize;
 end;
 
@@ -3269,7 +3288,9 @@ begin
       // title distributing up into them (below) or from a real caption sharing
       // the level. Skip them so they reserve no line of their own.
       if (Element.Caption='') or HeaderCellIsFiller(i, DrawCol) then begin
-        Col:=Col+Element.ColSpan;
+        var ColSpan:=Element.ColSpan;
+        if ColSpan<0 then ColSpan:=FColCount-i;
+        Col:=Col+ColSpan;
         Continue;
       end;
 
@@ -3319,7 +3340,9 @@ begin
       for var L:=TopLevel to BottomLevel do
         LevelHeight[L]:=Max(LevelHeight[L],Share);
 
-      Col:=Col+Element.ColSpan;
+      var ColSpan:=Element.ColSpan;
+      if ColSpan<0 then ColSpan:=FColCount-i;
+      Col:=Col+ColSpan;
     end;
   end;
 
@@ -3424,7 +3447,7 @@ begin
   end;
 end;
 
-procedure TMultiHeaderGrid.AutoSizeCols;
+procedure TMultiHeaderGrid.AutoSizeCols(IncreaseOnly: boolean = False; FirstRow: integer = -1; LastRow : integer = -1);
 var
   i,j:Integer;
   Text:string;
@@ -3450,7 +3473,16 @@ begin
 
   // Rows to scan for content width: all rows normally, or only fetched rows on
   // an on-demand cursor (C-fit-fetched).
-  var ScanRows:=ColScanRowLimit;
+  if FirstRow<0 then begin
+    FirstRow:=0;
+  end;
+  if LastRow<0 then begin
+    LastRow:=FRowCount-1;
+  end;
+  if UseFastMode then begin
+    FirstRow:=Max(RowAtHeightCoord(ViewTop)-500,0);
+    LastRow:=Min(RowAtHeightCoord(ViewBottom)+500,LastRow);
+  end;
 
   // Per-column data captured for the conservative-wrap reconciliation pass
   // (only meaningful for columns that were wrap-narrowed):
@@ -3465,44 +3497,49 @@ begin
 
   for i:=0 to FColCount-1 do begin
     // HeaderFullW  - widest header caption laid out on a SINGLE line.
-    // HeaderWordW  - widest single word (the tightest a wrapping header can be).
-    // DataW        - widest cell content (honouring cell word-wrap as before).
-    // DataFullW    - widest cell content on ONE line (ignores wrap shrink); used
-    //                as the natural-width cap when reconciling against viewport.
-    // CanWrapHdr   - any header element over this column allows word wrap.
     var HeaderFullW:Single:=0;
+    // HeaderWordW  - widest single word (the tightest a wrapping header can be).
     var HeaderWordW:Single:=0;
+    // DataW        - widest cell content (honouring cell word-wrap as before).
     var DataW:Single:=0;
+    // DataFullW    - widest cell content on ONE line (ignores wrap shrink); used
     var DataFullW:Single:=0;
+    // CanWrapHdr   - any header element over this column allows word wrap.
     var CanWrapHdr:Boolean:=False;
 
-    // Check the headers
-    for j:=0 to FHeaderLevels.Count-1 do begin
-      var Element:=FHeaderLevels.GetElementAtCell(i,j);
-      if not Assigned(Element) then Continue;
+    if not IncreaseOnly then begin
+      // Header Measurement
 
-      Canvas.Font.Assign(FCellFont);
-      if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
-      if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
-      if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
+      // Check the headers
+      for j:=0 to FHeaderLevels.Count-1 do begin
+        var Element:=FHeaderLevels.GetElementAtCell(i,j);
+        if not Assigned(Element) then Continue;
 
-      if HeaderCellWordWrap(Element) then CanWrapHdr:=True;
+        Canvas.Font.Assign(FCellFont);
+        if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
+        if Element.Style.FontSizeIsSet then Canvas.Font.Size:=Element.Style.FontSize;
+        if Element.Style.FontStyleIsSet then Canvas.Font.Style:=Element.Style.FontStyle;
 
-      // Full one-line width (per spanned column).
-      var Lines:=Element.Caption.Split([#13#10]);
-      for var Line in Lines do
-        HeaderFullW:=Max(HeaderFullW,
-          Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
+        if HeaderCellWordWrap(Element) then CanWrapHdr:=True;
 
-      // Widest single unbreakable token - the hard floor for a wrapped
-      // column: a whole word must fit within ONE column's width, so it is NOT
-      // divided by the ColSpan (dividing would let a word split across the
-      // span). Only true whitespace/line-breaks delimit tokens, so a word is
-      // never broken mid-characters.
-      var Words:=Element.Caption.Split([' ', #9, #13, #10]);
-      for var Word in Words do
-        if Word<>'' then
-          HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word));
+        // Full one-line width (per spanned column).
+        var Lines:=Element.Caption.Split([#13#10]);
+        for var Line in Lines do
+          HeaderFullW:=Max(HeaderFullW,
+            Canvas.TextWidth(Line)/Element.FColSpan-(Element.FColSpan-1)*CellDelimterWidth);
+
+        // Widest single unbreakable token - the hard floor for a wrapped
+        // column: a whole word must fit within ONE column's width, so it is NOT
+        // divided by the ColSpan (dividing would let a word split across the
+        // span). Only true whitespace/line-breaks delimit tokens, so a word is
+        // never broken mid-characters.
+        var Words:=Element.Caption.Split([' ', #9, #13, #10]);
+        for var Word in Words do begin
+          if Word<>'' then begin
+            HeaderWordW:=Max(HeaderWordW,Canvas.TextWidth(Word));
+          end;
+        end;
+      end;
     end;
 
     // Optimization: if this column has no WordWrap, use the fast logic
@@ -3511,10 +3548,14 @@ begin
     if not ColHasWordWrap and UseFastMode then begin
       // Fast path
       Canvas.Font.Assign(FCellFont);
-      var FLetterWidth:=Canvas.TextWidth('V');
+      var FLetterWidth:=Canvas.TextWidth('A');
       var MaxLetters:=0.0;
+      var MaxLine:='';
+      var MaxColSpan:=1;
 
-      for j:=0 to ScanRows-1 do begin
+      for j:=FirstRow to LastRow do begin
+        if IncreaseOnly and FRowData[j].AutoSized then Continue;
+
         var ColSpan:=1;
         var MergedCell:TMergedCell;
         if IsMergedCell(i,j,MergedCell) then begin
@@ -3527,20 +3568,21 @@ begin
         var Letters:=GetMaxLineLength(Text)/ColSpan;
         if Letters>MaxLetters then begin
           MaxLetters:=Letters;
-          var Line:=GetMaxLine(Text);
+          MaxLine:=GetMaxLine(Text);
+          MaxColSpan:=ColSpan;
 
           var CellStyle:=CellStyle[i,j];
           Canvas.Font.Assign(FCellFont);
           if CellStyle.FontNameIsSet then Canvas.Font.Family:=CellStyle.FontName;
           if CellStyle.FontSizeIsSet then Canvas.Font.Size:=CellStyle.FontSize;
           if CellStyle.FontStyleIsSet then Canvas.Font.Style:=CellStyle.FontStyle;
-
-          DataW:=Max(DataW,Canvas.TextWidth(Line)/ColSpan-(ColSpan-1)*CellDelimterWidth);
         end;
       end;
+      DataW:=Max(DataW,Canvas.TextWidth(MaxLine)/MaxColSpan-(MaxColSpan-1)*CellDelimterWidth);
     end else begin
       // Full path (with WordWrap check)
-      for j:=0 to ScanRows-1 do begin
+      for j:=FirstRow to LastRow do begin
+        if IncreaseOnly and FRowData[j].AutoSized then Continue;
         var ColSpan:=1;
         var MergedCell:TMergedCell;
         var IsMerged:=IsMergedCell(i,j,MergedCell);
@@ -3559,10 +3601,11 @@ begin
 
         // Determine whether word wrap is enabled for this cell
         var WordWrapEnabled: Boolean;
-        if CellStyle.WordWrapIsSet then
+        if CellStyle.WordWrapIsSet then begin
           WordWrapEnabled:=CellStyle.WordWrap
-        else
+        end else begin
           WordWrapEnabled:=FWordWrap or FColData[i].WordWrap;
+        end;
 
         Canvas.Font.Assign(FCellFont);
         if CellStyle.FontNameIsSet then Canvas.Font.Family:=CellStyle.FontName;
@@ -3589,9 +3632,11 @@ begin
             // Wide content: size to the widest single word, let it wrap.
             var Words:=Text.Split([' ', ':', ';', ',', '.', '!', '?', '-', '+', '*', '/', '\', '|', #9]);
             var MaxWordWidth:=0.0;
-            for var Word in Words do
-              if Word<>'' then
+            for var Word in Words do begin
+              if Word<>'' then begin
                 MaxWordWidth:=Max(MaxWordWidth,Canvas.TextWidth(Word));
+              end;
+            end;
 
             if ConservativeWrap then begin
               // Try to keep Cell Width/Height as 5/1
@@ -3630,13 +3675,14 @@ begin
     var Wrapped:=CanWrapHdr and (HeaderFullW>50) and (HeaderFullW-DataW>20);
 
     var TargetW:Single;
-    if Wrapped then
+    if Wrapped then begin
       // Wrap header to data width, but never below the widest whole word so
       // words are not split - except an unusually long word is capped at
       // WordWidthCap (it then character-breaks rather than blow the column out).
       TargetW:=Max(DataW, Min(HeaderWordW, WordWidthCap))
-    else
+    end else begin
       TargetW:=Max(HeaderFullW,DataW);
+    end;
 
     // Add the padding
     TargetW:=TargetW+CellPaddingFull;
@@ -3653,8 +3699,9 @@ begin
       var WordFloor:=Min(HeaderWordW, WordWidthCap);
       var MinColForWord:=Ceil(WordFloor + CellPadding.Left + CellPadding.Right +
                               FGridLineWidth + 2);
-      if NewWidth<MinColForWord then
+      if NewWidth<MinColForWord then begin
         NewWidth:=MinColForWord;
+      end;
     end;
 
     // Floor at the column's own MinWidth (or a small absolute minimum), so a
@@ -3683,6 +3730,9 @@ begin
     // Limit width
     NewWidth:=Min(NewWidth,Max(FMaxColumnAutoWidth,FColData[i].MaxWidth));
 
+    if IncreaseOnly then begin
+      NewWidth:=Max(NewWidth,ColWidths[i]);
+    end;
     ColWidths[i]:=NewWidth;
   end;
 
@@ -3705,6 +3755,20 @@ begin
     BalanceHeaderColumnWidths;
 
   Invalidate;
+end;
+
+procedure TMultiHeaderGrid.AutoSizeVisibleCols;
+// Re-fits columns only for rows currently on screen (first..last visible row). Used for
+// live feedback during a column drag, where re-measuring every row below the
+// viewport on each MouseMove would be needlessly expensive.
+begin
+  var First:=RowAtHeightCoord(ViewTop);
+  if First<0 then First:=0;
+  var Last:=RowAtHeightCoord(ViewBottom);
+  if Last<First then Last:=FRowCount-1; // viewport past the last row
+  AutoSizeCols(True, First, Last);
+
+  UpdateSize;
 end;
 
 procedure TMultiHeaderGrid.ReconcileWrappedColumns(
@@ -3948,8 +4012,9 @@ begin
     end;
   end;
 
-  if Result then
+  if Result then begin
     AutoSizeHeaders;
+  end;
 end;
 
 type
@@ -4098,6 +4163,7 @@ begin
   end;
 end;
 
+
 procedure TMultiHeaderGrid.AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
 // Re-fits only the rows currently on screen (first..last visible row). Used for
 // live feedback during a column drag, where re-measuring every row below the
@@ -4196,7 +4262,7 @@ begin
           Continue;
         end;
         var ColSpan:=Element.ColSpan;
-        if ColSpan<0 then ColSpan:=FColCount;
+        if ColSpan<0 then ColSpan:=FColCount-i;
         if ColSpan<1 then ColSpan:=1; // never advance by 0 -> no infinite loop
         j:=j+ColSpan;
       end;
@@ -4313,7 +4379,7 @@ begin
       // row so off-screen rows (skipped during the live drag) match the new
       // wrap. No-op when the grid doesn't word-wrap.
       if WasColumnResize and GridHaveWordWrap then begin
-        AutoSizeRows(0,-1, FResizeStartColumnIndex, FResizeEndColumnIndex);
+        AutoSizeVisibleRows(FResizeStartColumnIndex, FResizeEndColumnIndex);
         UpdateSize;
       end;
 
@@ -4823,7 +4889,7 @@ begin
   // trigger a needless pass.
   if (not FSuppressAutoSize) and (ARow>=0) and (ARow<FRowCount) and
      (not WrappedBefore) and EffectiveCellWordWrap(ACol, ARow) then begin
-    AutoSizeRows(ARow, ARow);
+    AutoSizeVisibleRows(ARow, ARow);
     UpdateSize;
   end;
 end;
@@ -4874,6 +4940,26 @@ begin
     FHorisontalScroll:=Value;
     UpdateSize;
     Invalidate;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetKeepColumnsAutoSized(const Value: Boolean);
+begin
+  if FKeepColumnsAutoSized<>Value then begin
+    FKeepColumnsAutoSized:=Value;
+    if Value then begin
+      Invalidate;
+    end;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetKeepRowsAutoSized(const Value: Boolean);
+begin
+  if FKeepRowsAutoSized<>Value then begin
+    FKeepRowsAutoSized:=Value;
+    if Value then begin
+      Invalidate;
+    end;
   end;
 end;
 
@@ -5007,7 +5093,7 @@ begin
     Cells[C,ARow]:='';
 
   FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), ARow);
-  AutoSizeRows;
+  AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
   DoSelectCell;
@@ -5026,7 +5112,7 @@ begin
     Cells[C,FRowCount-1]:='';
 
   FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), FRowCount-1);
-  AutoSizeRows;
+  AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
   DoSelectCell;
@@ -5062,7 +5148,7 @@ begin
   RowCount:=FRowCount-1;
 
   FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), Min(ARow,FRowCount-1));
-  AutoSizeRows;
+  AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
   DoSelectCell;
@@ -5857,14 +5943,17 @@ begin
             CellRect.Bottom
           );
 
+          var ColSpan:=FHeaderLevels[i][j].ColSpan;
+          if ColSpan<0 then ColSpan:=FColCount-i;
+
           if ResizeRect.Contains(PointF(X, Y)) then begin
             AStartCol:=Col;
-            AEndCol:=Col+FHeaderLevels[i][j].ColSpan-1;
+            AEndCol:=Col+ColSpan-1;
             Result:=TResizeMode.rmColumn;
             Exit;
           end;
 
-          Col:=Col+FHeaderLevels[i][j].ColSpan;
+          Col:=Col+ColSpan;
         end;
       end;
     end;
@@ -5878,8 +5967,11 @@ begin
           // The bottom edge of a blank filler is an internal, visually
           // suppressed border of a merged title stack - don't expose a
           // row-resize handle there.
+          var ColSpan:=FHeaderLevels[i][j].ColSpan;
+          if ColSpan<0 then ColSpan:=FColCount-i;
+
           if HeaderCellIsFiller(i, Col+FHeaderLevels[i][j].ColSkip) then begin
-            Col:=Col+FHeaderLevels[i][j].ColSpan;
+            Col:=Col+ColSpan;
             Continue;
           end;
 
@@ -5898,7 +5990,7 @@ begin
             Exit;
           end;
 
-          Col:=Col+FHeaderLevels[i][j].ColSpan;
+          Col:=Col+ColSpan;
         end;
       end;
     end;
@@ -6101,8 +6193,9 @@ begin
 
   // Narrower columns wrap their captions onto more lines, so the header height
   // must follow the new widths. Only needed when header word-wrap is in play.
-  if FHeaderWordWrap then
+  if FHeaderWordWrap then begin
     AutoSizeHeaders;
+  end;
 end;
 
 procedure TMultiHeaderGrid.UpdateHeaderRowHeight(ARow: Integer; NewHeight: Integer);
@@ -6172,11 +6265,6 @@ end;
 function TMultiHeaderGrid.InLayout: Boolean;
 begin
   Result:=FInLayout;
-end;
-
-function TMultiHeaderGrid.ColScanRowLimit: Integer;
-begin
-  Result:=FRowCount; // base grids hold all rows
 end;
 
 function TMultiHeaderGrid.ResizeStartWidth: Integer;
@@ -6271,7 +6359,7 @@ begin
     // Skipped during a bulk rebuild (it applies wrap to every column in a loop
     // and sizes once at the end).
     if not FSuppressAutoSize then begin
-      AutoSizeRows;
+      AutoSizeVisibleRows;
       UpdateSize;
     end;
     Invalidate;
@@ -6290,7 +6378,7 @@ begin
     // Row heights depend on wrap, so re-fit them now. Skipped during a
     // bulk rebuild, which does its own single sizing pass at the end.
     if not FSuppressAutoSize and Value then begin
-      AutoSizeRows;
+      AutoSizeVisibleRows;
       UpdateSize;
     end;
     Invalidate;
@@ -7098,20 +7186,22 @@ begin
       end;
     end;
 
-    if LayoutChanged then
+    if LayoutChanged then begin
       // Fresh structure: fit header heights to the new captions/widths.
-      AutoSizeHeaders
-    else
+      AutoSizeHeaders;
+    end else begin
       // Pure re-apply: keep the header heights exactly as they were.
-      for var i:=0 to Min(High(SavedHeights),FHeaderLevels.Count-1) do
+      for var i:=0 to Min(High(SavedHeights),FHeaderLevels.Count-1) do begin
         FHeaderLevels[i].Height:=SavedHeights[i];
+      end;
+    end;
 
     UpdateRowCount;
 
     // Rows just got default heights from UpdateRowCount; if the grid wraps,
     // fit them to content now.
     if GridHaveWordWrap then begin
-      AutoSizeRows;
+      AutoSizeVisibleRows;
       UpdateSize;
     end;
   finally
@@ -7648,14 +7738,6 @@ begin
   end;
 end;
 
-function TMultiHeaderDBGrid.ColScanRowLimit: Integer;
-begin
-  // Bound the column-width scan to rows fetched so far (C-fit-fetched) -
-  // RowCount is the fetched RecordCount.
-  Result:=Min(FRowCount, RowCount);
-  if Result<0 then Result:=0;
-end;
-
 function TMultiHeaderDBGrid.EditorKindForField(Field: TField): TMHGEditorKind;
 begin
   Result:=EditorKindForField(Field, False);
@@ -8138,7 +8220,7 @@ begin
   // be selected and copied (the editor itself is set read-only by the base via
   // CellIsModifiable). Boolean fields are excluded - they toggle in place.
   Result:=False;
-  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=FRowCount) then Exit;
 
   var Field:=FieldForCol(ACol);
   if Field=nil then Exit;
@@ -8153,7 +8235,7 @@ begin
   // modify, and the bound field is itself writable.
   Result:=False;
   if FReadOnly then Exit;
-  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=FRowCount) then Exit;
 
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
@@ -8194,7 +8276,7 @@ begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) then Exit;
 
-  var AtLast:=(RowCount>0) and (Row>=RowCount-1);
+  var AtLast:=(FRowCount>0) and (Row>=FRowCount-1);
 
   // An unmodified, freshly-inserted record sitting at the end: Down keeps the
   // caret there instead of appending another empty record.
@@ -8235,7 +8317,7 @@ procedure TMultiHeaderDBGrid.AppendRow;
 begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
-  if not DoAppendRow(RowCount) then Exit;
+  if not DoAppendRow(FRowCount) then Exit;
 
   if FEditing then CancelEditing;
   FInsertRowIndex:=DS.RecordCount; // phantom row shown after the last row
@@ -8248,7 +8330,7 @@ procedure TMultiHeaderDBGrid.DeleteRow(ARow: Integer);
 begin
   var DS:=DataSet;
   if (DS=nil) or (not DS.Active) or (not DS.CanModify) then Exit;
-  if (ARow<0) or (ARow>=RowCount) then Exit;
+  if (ARow<0) or (ARow>=FRowCount) then Exit;
   if DS.IsEmpty then Exit;
   if not DoDeleteRow(ARow) then Exit;
 
@@ -8271,7 +8353,7 @@ function TMultiHeaderDBGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
 begin
   Result:=False;
   if FReadOnly then Exit;
-  if (ACol<0) or (ARow<0) or (ARow>=RowCount) then Exit;
+  if (ACol<0) or (ARow<0) or (ARow>=FRowCount) then Exit;
 
   var Field:=FieldForCol(ACol);
   Result:=(Field<>nil) and (EditorKindForField(Field)=ekCheckBox);
