@@ -761,7 +761,7 @@ type
 
     procedure AutoSizeRows(FromRow: integer = 0; ToRow: integer = -1;
                            FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1;
-                           TryOptimise: boolean = False);
+                           TryOptimise: boolean = False; ViewBottomY: integer = -1);
 
     procedure AutoSizeVisibleRows(FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1);
     // Sizes each header level's height to fit its (optionally wrapped or
@@ -4128,7 +4128,7 @@ type
 
 procedure TMultiHeaderGrid.AutoSizeRows(FromRow: integer = 0; ToRow: integer = -1;
                                         FResizeStartColumnIndex: integer = -1; FResizeEndColumnIndex: integer = -1;
-                                        TryOptimise: boolean = False);
+                                        TryOptimise: boolean = False; ViewBottomY: integer = -1);
 begin
   // If a column rebuild is pending (deferred), do it first so we auto-size the
   // up-to-date layout rather than the stale one. No-op on grids without
@@ -4152,7 +4152,13 @@ begin
 
     var CellPaddingHeight:=CellPadding.Top+CellPadding.Bottom;
     var CellDelimterHeight:=FGridLineWidth;
+    // Viewport-driven bottom: when the caller passes a Y coordinate (visible-row
+    // resize), the number of rows that actually fit changes AS rows grow. We can
+    // no longer trust a row index snapshotted before the sweep, so we stop on the
+    // freshly-grown row top instead. Fall back to the pre-sweep ViewBottom.
     var ViewBottomCell:=ViewBottom;
+    if ViewBottomY>=0 then
+      ViewBottomCell:=ViewBottomY;
 
     var ComputeMode:=TSizeComputeMode.cmSlow;
     if FRowCount*FColumns.Count>10000 then begin
@@ -4176,8 +4182,15 @@ begin
     var TH:=Canvas.TextHeight('A');
     var Changed:=False;
     for var Row:=FromRow to FRowCount-1 do begin
+      // Y-driven stop (visible-row resize): the previous iterations have already
+      // grown FRowData[..].Top, so this reads the CURRENT layout, not a stale
+      // pre-sweep row index. Break once the prior row's grown top clears the
+      // viewport - keeping the sweep one row ahead so the last partially-visible
+      // row is fully sized. This is what makes bottom rows resize correctly on
+      // first paint, where the snapshotted last row was too optimistic.
+      if (ViewBottomY>=0) and (Row>FromRow) and (FRowData[Row-1].Top>ViewBottomCell) then Break;
       if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
-         ((ToRow>=0) and (Row>ToRow)) then Break;
+         ((ViewBottomY<0) and (ToRow>=0) and (Row>ToRow)) then Break;
 
       if TryOptimise and FRowData[Row].AutoSized then Continue;
 
@@ -4277,9 +4290,11 @@ procedure TMultiHeaderGrid.AutoSizeVisibleRows(FResizeStartColumnIndex: integer 
 begin
   var First:=RowAtHeightCoord(ViewTop);
   if First<0 then First:=0;
-  var Last:=RowAtHeightCoord(ViewBottom);
-  if Last<First then Last:=FRowCount-1; // viewport past the last row
-  AutoSizeRows(First, Last, FResizeStartColumnIndex, FResizeEndColumnIndex, True);
+  // Pass the viewport bottom as a Y coordinate rather than a pre-resolved last
+  // row: as rows grow during the sweep the number that actually fit changes, so
+  // a row index snapshotted here would be wrong for the bottom rows on first
+  // paint. ToRow stays -1; the Y bound (last arg) drives the stop.
+  AutoSizeRows(First, -1, FResizeStartColumnIndex, FResizeEndColumnIndex, True, ViewBottom);
 
   UpdateSize;
 end;
@@ -4671,6 +4686,20 @@ begin
     if (NewCol<>FSelectedCell.X) or (NewRow<>FSelectedCell.Y) then begin
       FPainted:=False;
       FSelectedCell:=Point(NewCol, NewRow);
+
+      // Word-wrap rows below the viewport still hold their default height until
+      // they are first painted, so a page/large jump lands the selection on a
+      // row whose geometry is not final yet. ScrollToSelectedCell would then read
+      // stale row tops and leave the target below the corrected bottom (the same
+      // stale-geometry issue as visible-row autosizing). Size the rows spanning
+      // the current top down through the target FIRST, so the scroll math uses
+      // the final heights. Bounded to the moved-over range, so it stays cheap.
+      if FKeepRowsAutoSized and WordWrap and (not FEndJump) then begin
+        var TopRow:=RowAtHeightCoord(ViewTop);
+        if TopRow<0 then TopRow:=0;
+        if NewRow>=TopRow then
+          AutoSizeRows(TopRow, NewRow, -1, -1, True);
+      end;
 
       ScrollToSelectedCell;
       DoSelectCell;
