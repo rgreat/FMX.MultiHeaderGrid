@@ -247,7 +247,6 @@ object Form1: TForm1
         Size.Width = 1542.000000000000000000
         Size.Height = 465.000000000000000000
         Size.PlatformDefault = False
-        ColCount = 1
         Col = -1
         Row = -1
         DefaultColWidth = 80
@@ -255,6 +254,14 @@ object Form1: TForm1
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
         Columns = <
+          item
+          end
+          item
+          end
+          item
+          end
+          item
+          end
           item
           end>
         OnSelectCell = GridSelectCell
@@ -296,19 +303,14 @@ object Form1: TForm1
         CellColorAlternate = xFFEDFAFF
         Columns = <
           item
-            Title = '1'
           end
           item
-            Title = '2'
           end
           item
-            Title = '3'
           end
           item
-            Title = '4'
           end
           item
-            Title = '5'
           end>
         OnSelectCell = GridSelectCell
         OnDrawCell = GridDrawCell

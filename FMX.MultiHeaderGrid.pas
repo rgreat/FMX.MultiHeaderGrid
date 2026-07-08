@@ -272,7 +272,7 @@ type
   end;
 
   FColData = record
-    Widths         : integer;
+    Width          : integer;
     MinWidth       : integer;
     MaxWidth       : integer;
     TextVAlignment : TTextAlign;
@@ -312,7 +312,6 @@ type
       HScrollPanel: TPaintBox;
       CornerPanel: TPanel;
 
-      FColCount: Integer;
       FRowCount: Integer;
       FDefaultColWidth: integer;
       FDefaultRowHeight: integer;
@@ -400,6 +399,10 @@ type
       FConservativeWrap: Boolean;
       FColumns: TMHGColumns;
       FRebuildingColumns: Boolean;
+      // One-shot guard: at design time a freshly dropped grid seeds a few
+      // placeholder columns on its first layout (so it is not an empty
+      // rectangle). Set once so it never fights the user emptying Columns later.
+      FDesignIsLoaded: Boolean;
       // Raised by bulk operations (header/column rebuilds) that apply word-wrap
       // to many columns at once, so the per-setter row re-fit doesn't run once
       // per column. The caller does a single sizing pass when finished.
@@ -517,6 +520,10 @@ type
     // property change. The base grid rebuilds the header from the collection;
     // the DB grid defers a full table rebuild instead.
     procedure ColumnsChanged; virtual;
+    // Initializes a Columns item created by growing ColCount. The base grid
+    // only stamps the default width; the DB grid overrides it to also assign
+    // the next unused FieldName so a grown column binds to a real field.
+    procedure InitNewColumn(ACol: TMHGHeaderColumn); virtual;
 
     // --- Inplace editor extensibility hooks -----------------------------
     // The base/string grids always edit through the shared TMemo (FEditor).
@@ -591,7 +598,12 @@ type
     procedure DrawToggleCell(Canvas: TCanvas; ACol, ARow: Integer;
                              const ARect: TRectF; IsSelected, AChecked: Boolean); virtual;
     procedure SetRowCount(Value: Integer);
+    function  GetColCount: Integer;
     procedure SetColCount(Value: Integer);
+    // Sizes FColData (per-column geometry) to Columns.Count, stamping defaults
+    // on any newly added slots. Used by the rebuild paths, which must resize
+    // internal geometry to match the collection WITHOUT mutating it.
+    procedure EnsureColData;
     procedure SetDefaultColWidth(const Value: integer);
     procedure SetDefaultRowHeight(const Value: integer);
     procedure SetGridLines(const Value: Boolean);
@@ -695,6 +707,7 @@ type
     procedure EnsureLayout; virtual;
 
     procedure Paint; override;
+    procedure Loaded; override;
     procedure Resize; override;
     procedure DoSelectCell; virtual;
     procedure DoDrawCell(ACol, ARow: Integer; Canvas: TCanvas; const Rect: TRectF; IsSelected: boolean; const Text: string; var Handled: Boolean); virtual;
@@ -838,7 +851,7 @@ type
     property OnKeyDown;
     property OnKeyUp;
 
-    property ColCount: Integer read FColCount write SetColCount default 5;
+    property ColCount: Integer read GetColCount write SetColCount stored False;
     property RowCount: Integer read FRowCount write SetRowCount default 10;
 
     property Col: Integer read FSelectedCell.X write SetCol;
@@ -867,7 +880,7 @@ type
 
     property RowSelect: Boolean read FRowSelect write SetRowSelect default False;
     // When True the inplace cell editor is disabled and the grid is view-only.
-    property ReadOnly: Boolean read FReadOnly write SetReadOnly default False;
+    property ReadOnly: Boolean read FReadOnly write SetReadOnly default True;
     // A column may be transiently widened to fit the inplace editor. When False
     // (default) the column returns to its pre-edit width when editing ends; when
     // True it keeps the enlarged width.
@@ -1204,6 +1217,7 @@ type
     // collection change defers one coalesced table rebuild.
     function CreateColumns: TMHGColumns; override;
     procedure ColumnsChanged; override;
+    procedure InitNewColumn(ACol: TMHGHeaderColumn); override;
     procedure DoGetCellText(ACol, ARow: Integer; var Text: string); override;
     procedure DoSetCellText(ACol, ARow: Integer; const Text: string); override;
     procedure DoGetCellStyle(ACol, ARow: Integer; var Style: TCellStyle); override;
@@ -1520,12 +1534,12 @@ end;
 
 function THeaderLevels.AddRowOnTop: THeaderLevel;
 begin
-  Result:=AddRowOnTop(25);
+  Result:=AddRowOnTop(Grid.DefaultRowHeight);
 end;
 
 function THeaderLevels.AddRow: THeaderLevel;
 begin
-  Result:=AddRow(25);
+  Result:=AddRow(Grid.DefaultRowHeight);
 end;
 
 constructor THeaderLevels.Create(Grid: TMultiHeaderGrid);
@@ -1543,7 +1557,7 @@ begin
     var Left:=0;
     for var Element in Level do begin
       var ColSpan:=Element.ColSpan;
-      if ColSpan<0 then ColSpan:=Grid.FColCount-Left;
+      if ColSpan<0 then ColSpan:=Grid.ColCount-Left;
 
       if (ACol>=Left+Element.ColSkip) and (ACol<Left+ColSpan+Element.ColSkip) and
          (ARow>=Row) and (ARow<Row+Element.RowSpan) then Exit(Element);
@@ -1791,7 +1805,6 @@ begin
   FLastColEvent:=-1; // no column entered yet (OnColEnter/OnColExit guard)
   FEditWidenAnchor:=-1;
   FAutoSizePrecise:=False; // fast until the user requests a precise AutoSize
-  FColCount:=5;
   FRowCount:=10;
   FDefaultColWidth:=80;
   FDefaultRowHeight:=20;
@@ -1806,6 +1819,7 @@ begin
   FMaxColumnAutoWidth:=400;
   FKeepRowsAutoSized:=True;
   FKeepColumnsAutoSized:=True;
+  FReadOnly:=True;
 
   Margins.Rect:=RectF(4,4,4,4);
 
@@ -1838,7 +1852,6 @@ begin
   HScrollBar.Parent:=HScrollPanel;
   HScrollBar.Align:=TAlignLayout.Client;
 
-  
   FCellFont:=TFont.Create;
   FCellFontColor:=TAlphaColors.Black;
   FCellColor:=TAlphaColors.White;
@@ -1858,9 +1871,9 @@ begin
   CellPadding:=TBounds.Create(TRectF.Create(2,1,2,1));
 
   // Initialize column widths and row heights
-  SetLength(FColData,FColCount);
-  for i:=0 to FColCount-1 do begin
-    FColData[i].Widths:=FDefaultColWidth;
+  SetLength(FColData,FColumns.Count);
+  for i:=0 to FColumns.Count-1 do begin
+    FColData[i].Width:=FDefaultColWidth;
     FColData[i].TextVAlignment:=TTextAlign.Center;
     FColData[i].TextHAlignment:=TTextAlign.Leading;
     FColData[i].WordWrap:=False;
@@ -1892,11 +1905,8 @@ begin
   FResizeMargin:=2;
 
   if csDesigning in ComponentState then begin
-    Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
     Width:=401;
-    Height:=225;
-    VScrollBar.Visible:=False;
-    HScrollPanel.Visible:=False;
+    Height:=222;
   end;
 end;
 
@@ -1920,7 +1930,7 @@ end;
 
 procedure TMultiHeaderGrid.SetCol(const Value: Integer);
 begin
-  if (FRowCount<=0) or (FColCount<=0) then Exit;
+  if (FRowCount<=0) or (FColumns.Count<=0) then Exit;
 
   if FSelectedCell.X=Value then Exit;
 
@@ -1930,62 +1940,80 @@ begin
   DoSelectCell;
 end;
 
+function TMultiHeaderGrid.GetColCount: Integer;
+begin
+  Result:=FColumns.Count;
+end;
+
+procedure TMultiHeaderGrid.EnsureColData;
+begin
+  var Old:=Length(FColData);
+  if Old=FColumns.Count then Exit;
+  SetLength(FColData,FColumns.Count);
+  for var i:=Old to FColumns.Count-1 do begin
+    FColData[i].Width:=FDefaultColWidth;
+    FColData[i].TextVAlignment:=TTextAlign.Center;
+    FColData[i].TextHAlignment:=TTextAlign.Leading;
+    FColData[i].MinWidth:=0;
+    FColData[i].MaxWidth:=0;
+    FColData[i].WordWrap:=False;
+  end;
+  if FColumns.Count=0 then FGridCellsHasWordWrap:=False;
+end;
+
+procedure TMultiHeaderGrid.InitNewColumn(ACol: TMHGHeaderColumn);
+// Applies the grid's per-column geometry defaults to a freshly created item.
+// Overridden by the DB grid to also assign the next unused FieldName.
+begin
+  ACol.Width:=FDefaultColWidth;
+end;
+
 procedure TMultiHeaderGrid.SetColCount(Value: Integer);
-var
-  i: Integer;
+// ColCount is a view onto Columns.Count: setting it grows the collection with
+// blank default items or trims trailing items so the two always agree. The
+// collection's own change notification then resizes FColData and rebuilds.
 begin
   if Value<0 then Value:=0;
-  if FColCount<>Value then begin
-    var OldValue:=FColCount;
+  if FColumns.Count=Value then Exit;
 
-    FColCount:=Value;
-
-    SetLength(FColData,FColCount);
-    for i:=OldValue to FColCount-1 do begin
-      FColData[i].Widths:=FDefaultColWidth;
-      FColData[i].TextVAlignment:=TTextAlign.Center;
-      FColData[i].TextHAlignment:=TTextAlign.Leading;
-      FColData[i].MinWidth:=0;
-      FColData[i].MaxWidth:=0;
-      FColData[i].WordWrap:=False;
-    end;
-
-    if FColCount=0 then FGridCellsHasWordWrap:=False;
-
-    UpdateSize;
-    Invalidate;
-
-    HScrollBar.Max:=Value;
+  FColumns.BeginUpdate;
+  try
+    while FColumns.Count>Value do
+      FColumns.Items[FColumns.Count-1].Free;
+    while FColumns.Count<Value do
+      InitNewColumn(FColumns.Add);
+  finally
+    FColumns.EndUpdate;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetColMaxWidth(Index: Integer; const Value: integer);
 begin
-  if (Index>=0) and (Index<FColCount) then begin
+  if (Index>=0) and (Index<Length(FColData)) then begin
     FColData[Index].MaxWidth:=Max(Value,FColData[Index].MinWidth);
     // A max constraint only shrinks an over-wide column; columns already
     // within range are left untouched.
-    if FColData[Index].Widths>FColData[Index].MaxWidth then
-      FColData[Index].Widths:=FColData[Index].MaxWidth;
+    if FColData[Index].Width>FColData[Index].MaxWidth then
+      FColData[Index].Width:=FColData[Index].MaxWidth;
     Invalidate;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetColMinWidth(Index: Integer; const Value: integer);
 begin
-  if (Index>=0) and (Index<FColCount) then begin
+  if (Index>=0) and (Index<Length(FColData)) then begin
     FColData[Index].MinWidth:=Min(Value,FColData[Index].MaxWidth);
     // A min constraint only grows an under-wide column; columns already
     // within range are left untouched.
-    if FColData[Index].Widths<FColData[Index].MinWidth then
-      FColData[Index].Widths:=FColData[Index].MinWidth;
+    if FColData[Index].Width<FColData[Index].MinWidth then
+      FColData[Index].Width:=FColData[Index].MinWidth;
     Invalidate;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetRow(const Value: Integer);
 begin
-  if (FRowCount<=0) or (FColCount<=0) then Exit;
+  if (FRowCount<=0) or (FColumns.Count<=0) then Exit;
 
   if FSelectedCell.Y=Value then Exit;
 
@@ -2003,7 +2031,7 @@ begin
     var OldValue:=FRowCount;
 
     if (Value<FRowCount) and (Value>0) then begin
-      for var i:=0 to FColCount-1 do begin
+      for var i:=0 to FColumns.Count-1 do begin
         UnMergeCells(i,Value-1);
       end;
     end;
@@ -2020,7 +2048,7 @@ begin
       Top:=Top+FRowData[i].Height;
     end;
 
-    if FColCount=0 then FGridCellsHasWordWrap:=False;
+    if FColumns.Count=0 then FGridCellsHasWordWrap:=False;
 
     UpdateSize;
     Invalidate;
@@ -2038,8 +2066,8 @@ begin
     var OldValue:=FDefaultColWidth;
     FDefaultColWidth:=Value;
 
-    for i:=0 to FColCount-1 do begin
-      if FColData[i].Widths=OldValue then begin
+    for i:=0 to FColumns.Count-1 do begin
+      if FColData[i].Width=OldValue then begin
         ColWidths[i]:=FDefaultColWidth;
       end;
     end;
@@ -2070,7 +2098,7 @@ function TMultiHeaderGrid.GetColLeft(Index: Integer): Integer;
 begin
   Result:=0;
   for var i:=0 to Index-1 do
-    inc(Result,FColData[i].Widths);
+    inc(Result,FColData[i].Width);
 end;
 
 function TMultiHeaderGrid.GetColMaxWidth(Index: Integer): integer;
@@ -2092,7 +2120,7 @@ end;
 function TMultiHeaderGrid.GetColWidth(Index: Integer): Integer;
 begin
   if (Index>=0) and (Index<Length(FColData)) then
-    Result:=FColData[Index].Widths
+    Result:=FColData[Index].Width
   else
     Result:=FDefaultColWidth;
 end;
@@ -2109,20 +2137,20 @@ end;
 function TMultiHeaderGrid.FullTableWidth: Integer;
 begin
   Result:=round(FGridLineWidth/2);
-  for var i:=0 to FColCount-1 do begin
-    Result:=Result+FColData[i].Widths;
+  for var i:=0 to FColumns.Count-1 do begin
+    Result:=Result+FColData[i].Width;
   end;
 end;
 
 procedure TMultiHeaderGrid.SetColWidth(Index: Integer; const Value: Integer);
 begin
-  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].Widths<>Value) then begin
-    FColData[Index].Widths:=Value;
+  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].Width<>Value) then begin
+    FColData[Index].Width:=Value;
     if FColData[Index].MaxWidth>0 then begin
-      FColData[Index].Widths:=Min(FColData[Index].Widths,FColData[Index].MaxWidth);
+      FColData[Index].Width:=Min(FColData[Index].Width,FColData[Index].MaxWidth);
     end;
     if FColData[Index].MinWidth>0 then begin
-      FColData[Index].Widths:=Max(FColData[Index].Widths,FColData[Index].MinWidth);
+      FColData[Index].Width:=Max(FColData[Index].Width,FColData[Index].MinWidth);
     end;
     for var i:=0 to High(FRowData) do begin
       if FRowData[i].AutoSized then FRowData[i].AutoSized:=False;
@@ -2196,7 +2224,7 @@ var
   i    : Integer;
 begin
   // Check the range is valid
-  if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
+  if (ACol<0) or (ARow<0) or (ACol>=FColumns.Count) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
   X:=-ViewLeft;
@@ -2218,7 +2246,7 @@ begin
 
     Result.Left:=X+GetColLeft(ACol);
     Result.Top:=Y+FRowData[ARow].Top;
-    Result.Right:=Result.Left+FColData[ACol].Widths;
+    Result.Right:=Result.Left+FColData[ACol].Width;
     Result.Bottom:=Result.Top+FRowData[ARow].Height;
   end;
 end;
@@ -2229,7 +2257,7 @@ var
   i: Integer;
 begin
   // Check the range is valid
-  if (ACol<0) or (ARow<0) or (ACol>=FColCount) or (ARow>=FRowCount) then
+  if (ACol<0) or (ARow<0) or (ACol>=FColumns.Count) or (ARow>=FRowCount) then
     Exit(Default(TRectF));
 
   X:=FGridLineWidth/4-ViewLeft;
@@ -2289,10 +2317,10 @@ begin
   // Determine the effective ColSpan (no more than the remaining columns)
   ActualColSpan:=Element.ColSpan;
   if ActualColSpan<0 then begin
-    ActualColSpan:=FColCount-ACol;
+    ActualColSpan:=FColumns.Count-ACol;
   end;
-  if ACol+ActualColSpan>FColCount then begin
-    ActualColSpan:=FColCount-ACol;
+  if ACol+ActualColSpan>FColumns.Count then begin
+    ActualColSpan:=FColumns.Count-ACol;
   end;
 
   // Calculate the header cell width
@@ -2313,10 +2341,48 @@ end;
 
 procedure TMultiHeaderGrid.UpdateSize;
 begin
-  if (FColCount+FRowCount>0) and (ViewPortHeight<FullTableHeight-FGridLineWidth/2-1) then begin
+  var VSize:=FullTableHeight;//+FGridLineWidth/2;
+  var HSize:=FullTableWidth;
+
+  var VFit:=VSize<=Round(LocalRect.Height-GridLineWidth);
+  var HFit:=HSize<=Round(LocalRect.Width);
+
+  if VFit and HFit then begin
+    VScrollBar.Visible:=False;
+    HScrollPanel.Visible:=False;
+  end else begin
+    VScrollBar.Visible:=True;
+    HScrollPanel.Visible:=True;
+  end;
+
+  // First vertical pass
+  if (FColumns.Count+FRowCount>0) and (ViewPortHeight<=VSize) then begin
+    VScrollBar.Visible:=FVerticalScroll<>TScrollShowMode.smHide;
+  end else begin
+    VScrollBar.Visible:=FVerticalScroll=TScrollShowMode.smShow;
+  end;
+
+  if (FColumns.Count>0) and (HSize>=ViewPortWidth) then begin
+    HScrollPanel.Visible:=FHorisontalScroll<>TScrollShowMode.smHide;
+    HScrollBar.Max:=HSize+1;
+    HScrollBar.Value:=ViewLeft;
+    HScrollBar.ViewportSize:=ViewPortWidth;
+    HScrollBar.SmallChange:=FDefaultColWidth;
+    HScrollBar.OnChange:=HScrollBarChange;
+    HScrollBar.Enabled:=True;
+  end else begin
+    HScrollPanel.Visible:=FHorisontalScroll=TScrollShowMode.smShow;
+    HScrollBar.OnChange:=nil;
+    HScrollBar.Max:=1;
+    HScrollBar.ViewportSize:=1;
+    HScrollBar.Enabled:=False;
+  end;
+
+  // Main vertical pass
+  if (FColumns.Count+FRowCount>0) and (ViewPortHeight<=VSize) then begin
     VScrollBar.Visible:=FVerticalScroll<>TScrollShowMode.smHide;
     CornerPanel.Visible:=True;
-    VScrollBar.Max:=FullTableHeight-HeaderHeight-FGridLineWidth/2;
+    VScrollBar.Max:=VSize+1;
     VScrollBar.Value:=ViewTop;
     VScrollBar.ViewportSize:=ViewPortDataHeight;
     VScrollBar.SmallChange:=DefaultRowHeight;
@@ -2329,22 +2395,6 @@ begin
     VScrollBar.Max:=1;
     VScrollBar.ViewportSize:=1;
     VScrollBar.Enabled:=False;
-  end;
-
-  if (FColCount>0) and (FullTableWidth>=ViewPortWidth) then begin
-    HScrollPanel.Visible:=FHorisontalScroll<>TScrollShowMode.smHide;
-    HScrollBar.Max:=FullTableWidth+1;
-    HScrollBar.Value:=ViewLeft;
-    HScrollBar.ViewportSize:=ViewPortWidth;
-    HScrollBar.SmallChange:=FDefaultColWidth;
-    HScrollBar.OnChange:=HScrollBarChange;
-    HScrollBar.Enabled:=True;
-  end else begin
-    HScrollPanel.Visible:=FHorisontalScroll=TScrollShowMode.smShow;
-    HScrollBar.OnChange:=nil;
-    HScrollBar.Max:=1;
-    HScrollBar.ViewportSize:=1;
-    HScrollBar.Enabled:=False;
   end;
 end;
 
@@ -2362,13 +2412,17 @@ end;
 function TMultiHeaderGrid.ViewPortWidth: Integer;
 begin
   Result:=Round(LocalRect.Width);
-  if VScrollBar.Visible then Result:=Round(Result-VScrollBar.Width);
+  if VScrollBar.Visible then begin
+    Result:=Round(Result-VScrollBar.Width);
+  end;
 end;
 
 function TMultiHeaderGrid.ViewPortHeight: Integer;
 begin
   Result:=Round(LocalRect.Height-GridLineWidth);
-  if HScrollPanel.Visible then Result:=Round(Result-HScrollPanel.Height);
+  if HScrollPanel.Visible then begin
+    Result:=Round(Result-HScrollPanel.Height);
+  end;
 end;
 
 procedure TMultiHeaderGrid.VScrollBarChange(Sender: TObject);
@@ -2388,10 +2442,30 @@ begin
   // Base grids have no deferred layout; the DB grid overrides this.
 end;
 
+procedure TMultiHeaderGrid.Loaded;
+begin
+  inherited;
+  // This grid was streamed from a form: its Columns (if any) are authoritative.
+  // Suppress the first-paint design seed so an intentionally empty grid stays
+  // empty; only a freshly dropped grid (which never runs Loaded) gets seeded.
+  FDesignIsLoaded:=True;
+end;
+
 procedure TMultiHeaderGrid.Paint;
 var
   Canvas: TCanvas;
 begin
+  // A freshly dropped design-time grid with no columns would paint as an empty
+  // rectangle. Seed a few placeholder columns the first time we paint - this
+  // runs after streaming, so a loaded form's own Columns are already in place
+  // and this no-ops. Guarded to fire at most once.
+  if (csDesigning in ComponentState) and not FDesignIsLoaded then begin
+    FDesignIsLoaded:=True;
+    if FColumns.Count=0 then begin
+      ColCount:=5;
+    end;
+  end;
+
   // Flush any pending deferred rebuild so we draw an up-to-date layout.
   EnsureLayout;
 
@@ -2403,8 +2477,14 @@ begin
       // Set the clipping region
       FDrawRect:=TRectF.Create(LocalRect.Left,LocalRect.Top,
                               LocalRect.Left+LocalRect.Width,LocalRect.Top+LocalRect.Height);
-      if VScrollBar.Visible then FDrawRect.Right:=FDrawRect.Right-VScrollBar.Width;
-      if HScrollPanel.Visible then FDrawRect.Bottom:=FDrawRect.Bottom-HScrollPanel.Height;
+
+      if VScrollBar.Visible then begin
+        FDrawRect.Right:=FDrawRect.Right-VScrollBar.Width;
+      end;
+      if HScrollPanel.Visible then begin
+        FDrawRect.Bottom:=FDrawRect.Bottom-HScrollPanel.Height;
+      end;
+
       Canvas.IntersectClipRect(FDrawRect);
 
       Canvas.Fill.Kind:=TBrushKind.Solid;
@@ -2458,7 +2538,7 @@ begin
       if not HeaderCellIsFiller(i, j+Element.ColSkip) then
         DrawHeaderCell(Canvas, i, j+Element.ColSkip);
       var ColSpan:=Element.ColSpan;
-      if ColSpan<0 then ColSpan:=FColCount-i;
+      if ColSpan<0 then ColSpan:=FColumns.Count-i;
       j:=j+Element.ColSpan;
     end;
   end;
@@ -2581,7 +2661,7 @@ begin
   if LastRow>RowDataLen-1 then LastRow:=RowDataLen-1;
   for j:=TopRow to LastRow do begin
     if FRowData[j].Top>ViewBottomCell then Break;
-    for i:=0 to FColCount-1 do begin
+    for i:=0 to FColumns.Count-1 do begin
 
       // Skip merged cells (except the first one)
       if IsMergedCell(i, j, MergedCell) then begin
@@ -2679,7 +2759,7 @@ begin
     // Added: word-wrap detection logic
     if CellStyle.WordWrapIsSet then begin
       WordWrapEnabled:=CellStyle.WordWrap;
-    end else if (ACol>=0) and (ACol<FColCount) then begin
+    end else if (ACol>=0) and (ACol<FColumns.Count) then begin
       WordWrapEnabled:=FWordWrap or FColData[ACol].WordWrap;
     end else begin
       WordWrapEnabled:=FWordWrap;
@@ -2795,7 +2875,7 @@ var
   MergedCell: TMergedCell;
 begin
   if not FGridLines then Exit;
-  if (FRowCount=0) or (FColCount=0) then Exit;
+  if (FRowCount=0) or (FColumns.Count=0) then Exit;
 
   Canvas.Stroke.Kind:=TBrushKind.Solid;
   Canvas.Stroke.Color:=FGridLineColor;
@@ -2813,7 +2893,7 @@ begin
   // Draw the data lines (as before)
   // First draw all vertical lines
   X:=StartX;
-  for i:=0 to FColCount do begin
+  for i:=0 to FColumns.Count do begin
     // Inner vertical lines
     if (X>=FDrawRect.Left) and (X<=FDrawRect.Right) then begin
       for j:=TopRow to FRowCount-1 do begin
@@ -2841,7 +2921,7 @@ begin
       end;
     end;
 
-    if i<FColCount then
+    if i<FColumns.Count then
       X:=X+GetColWidth(i);
   end;
 
@@ -2856,7 +2936,7 @@ begin
     if (i>0) and (FRowData[i-1].Top>ViewBottomCell) then Break;
 
     X:=StartX;
-    for j:=0 to FColCount-1 do begin
+    for j:=0 to FColumns.Count-1 do begin
       // Check whether the line falls inside a merged cell
       var ShouldDraw:=True;
       // Inner horizontal lines
@@ -2887,7 +2967,7 @@ end;
 function TMultiHeaderGrid.MergeCells(ACol, ARow, AColSpan, ARowSpan: Integer): Boolean;
 begin
   // Check the range is valid
-  if (ACol<0) or (ARow<0) or (ACol+AColSpan>FColCount) or (ARow+ARowSpan>FRowCount) then
+  if (ACol<0) or (ARow<0) or (ACol+AColSpan>FColumns.Count) or (ARow+ARowSpan>FRowCount) then
     Exit(False);
 
   for var Y:=ARow to ARow+ARowSpan-1 do begin
@@ -2926,7 +3006,7 @@ begin
 
   for var Y:=Style.ParentRow to FRowCount-1 do begin
     var IsMergedCell: Boolean;
-    for var X:=Style.ParentCol to FColCount-1 do begin
+    for var X:=Style.ParentCol to FColumns.Count-1 do begin
       var TmpStyle:=CellStyle[X,Y];
       IsMergedCell:=TmpStyle.IsMergedCell and (TmpStyle.ParentCol=Style.ParentCol) and (TmpStyle.ParentRow=Style.ParentRow);
       if IsMergedCell then begin
@@ -2946,7 +3026,7 @@ end;
 procedure TMultiHeaderGrid.ClearMergedCells;
 begin
   for var Y:=0 to FRowCount-1 do begin
-    for var X:=0 to FColCount-1 do begin
+    for var X:=0 to FColumns.Count-1 do begin
       var TmpStyle:=CellStyle[X,Y];
       if TmpStyle.IsMergedCell then begin
         TmpStyle.ClearMergedCell;
@@ -2978,7 +3058,7 @@ begin
   MergedCell.ColSpan:=1;
   MergedCell.RowSpan:=1;
 
-  for var X:=Style.ParentCol+1 to FColCount-1 do begin
+  for var X:=Style.ParentCol+1 to FColumns.Count-1 do begin
     var TmpStyle:=CellStyle[X,Style.ParentRow];
     var IsMergedCell:=TmpStyle.IsMergedCell and (TmpStyle.ParentCol=Style.ParentCol) and (TmpStyle.ParentRow=Style.ParentRow);
     if not IsMergedCell then Break;
@@ -3041,27 +3121,28 @@ begin
 end;
 
 procedure TMultiHeaderGrid.RebuildFromColumns;
-// Re-applies the Columns collection to the grid. When empty the
-// procedural header (Header.AddRow...) is left untouched.
+// Re-applies the Columns collection to the grid. Every item occupies a column
+// slot (ColCount = Columns.Count); a hidden item keeps its slot but renders at
+// zero width (see BuildHeaderFromColumns). When the collection is empty the
+// grid drops to zero columns and clears the header.
 begin
   if FRebuildingColumns then Exit;
   if FColumns=nil then Exit;
-  if FColumns.Count=0 then Exit;
 
   FRebuildingColumns:=True;
   try
-    // Gather visible items in order.
-    var Vis: array of TMHGHeaderColumn;
-    SetLength(Vis,FColumns.Count);
-    var Cnt:=0;
-    for var i:=0 to FColumns.Count-1 do
-      if FColumns[i].Visible then begin
-        Vis[Cnt]:=FColumns[i];
-        Inc(Cnt);
-      end;
-    SetLength(Vis,Cnt);
-
-    BuildHeaderFromColumns(Vis);
+    if FColumns.Count=0 then begin
+      EnsureColData; // shrink FColData to 0
+      Header.Clear;
+      UpdateSize;
+      Invalidate;
+    end else begin
+      var All: array of TMHGHeaderColumn;
+      SetLength(All,FColumns.Count);
+      for var i:=0 to FColumns.Count-1 do
+        All[i]:=FColumns[i];
+      BuildHeaderFromColumns(All);
+    end;
   finally
     FRebuildingColumns:=False;
   end;
@@ -3080,7 +3161,10 @@ begin
   var N:=Length(ACols);
   if N=0 then Exit;
 
-  ColCount:=N;
+  // ColCount already equals FColumns.Count here; size the internal geometry
+  // arrays to match rather than reassigning ColCount (which would mutate the
+  // collection and recurse).
+  EnsureColData;
   Header.Clear;
 
   SetLength(Paths,N);
@@ -3091,7 +3175,7 @@ begin
   end;
 
   for var Level:=0 to MaxDepth-1 do begin
-    var Row:=Header.AddRow(30);
+    var Row:=Header.AddRow(DefaultRowHeight);
     var Col:=0;
     while Col<N do begin
       if Length(Paths[Col])<=Level then begin
@@ -3113,7 +3197,7 @@ begin
   end;
 
   // Title row.
-  var TitleRow:=Header.AddRow(30);
+  var TitleRow:=Header.AddRow(DefaultRowHeight);
   for var i:=0 to N-1 do begin
     var El:=TitleRow.AddColumn(ACols[i].Title);
     El.Style.TextHAlignment:=ACols[i].HeaderAlignment;
@@ -3127,17 +3211,24 @@ begin
   FSuppressAutoSize:=True;
   try
     for var i:=0 to N-1 do begin
-      if ACols[i].Width>0 then ColWidths[i]:=ACols[i].Width;
       if ACols[i].MinWidth>0 then ColMinWidth[i]:=ACols[i].MinWidth;
       if ACols[i].MaxWidth>0 then ColMaxWidth[i]:=ACols[i].MaxWidth;
       ColWordWrap[i]:=ACols[i].WordWrap;
       ColTextHAlignment[i]:=ACols[i].Alignment;
       ColTextVAlignment[i]:=ACols[i].VertAlignment;
+      // A hidden column keeps its user Width but collapses to zero internal
+      // width so it takes no space and is not painted; a visible column takes
+      // its declared Width.
+      if not ACols[i].Visible then
+        FColData[i].Width:=0
+      else if ACols[i].Width>0 then
+        ColWidths[i]:=ACols[i].Width;
     end;
   finally
     FSuppressAutoSize:=False;
   end;
 
+  UpdateSize;
   Invalidate;
 end;
 
@@ -3167,7 +3258,7 @@ begin
   var Style:=CellStyle[ACol, ARow];
   if Style.WordWrapIsSet then
     Result:=Style.WordWrap
-  else if (ACol>=0) and (ACol<FColCount) then
+  else if (ACol>=0) and (ACol<FColumns.Count) then
     Result:=FWordWrap or FColData[ACol].WordWrap
   else
     Result:=FWordWrap;
@@ -3222,7 +3313,7 @@ begin
 
   // Word wrap: cell override, else grid-wide OR the column's flag.
   if not Result.WordWrapIsSet then
-    if (ACol>=0) and (ACol<FColCount) then
+    if (ACol>=0) and (ACol<FColumns.Count) then
       Result.WordWrap:=FWordWrap or FColData[ACol].WordWrap
     else
       Result.WordWrap:=FWordWrap;
@@ -3309,7 +3400,7 @@ begin
       // the level. Skip them so they reserve no line of their own.
       if (Element.Caption='') or HeaderCellIsFiller(i, DrawCol) then begin
         var ColSpan:=Element.ColSpan;
-        if ColSpan<0 then ColSpan:=FColCount-i;
+        if ColSpan<0 then ColSpan:=FColumns.Count-i;
         Col:=Col+ColSpan;
         Continue;
       end;
@@ -3361,7 +3452,7 @@ begin
         LevelHeight[L]:=Max(LevelHeight[L],Share);
 
       var ColSpan:=Element.ColSpan;
-      if ColSpan<0 then ColSpan:=FColCount-i;
+      if ColSpan<0 then ColSpan:=FColumns.Count-i;
       Col:=Col+ColSpan;
     end;
   end;
@@ -3489,7 +3580,7 @@ begin
   var WordWidthCap:Single:=Max(200, VP*0.6);
 
   // Optimization: if there's no WordWrap, use the fast path
-  var UseFastMode:=not FAutoSizePrecise and (FRowCount*FColCount>10000);
+  var UseFastMode:=not FAutoSizePrecise and (FRowCount*FColumns.Count>10000);
 
   // Rows to scan for content width: all rows normally, or only fetched rows on
   // an on-demand cursor (C-fit-fetched).
@@ -3511,11 +3602,11 @@ begin
   //                   (incl. padding); never shrink a wrapped column below this.
   //   ColNaturalW   - the width that would show the widest content on ONE line
   //                   (incl. padding); the cap we grow a wrapped column back to.
-  var ColIsWrapped: TArray<Boolean>; SetLength(ColIsWrapped, FColCount);
-  var ColWordFloor: TArray<Single>;  SetLength(ColWordFloor, FColCount);
-  var ColNaturalW:  TArray<Single>;  SetLength(ColNaturalW,  FColCount);
+  var ColIsWrapped: TArray<Boolean>; SetLength(ColIsWrapped, FColumns.Count);
+  var ColWordFloor: TArray<Single>;  SetLength(ColWordFloor, FColumns.Count);
+  var ColNaturalW:  TArray<Single>;  SetLength(ColNaturalW,  FColumns.Count);
 
-  for i:=0 to FColCount-1 do begin
+  for i:=0 to FColumns.Count-1 do begin
     // HeaderFullW  - widest header caption laid out on a SINGLE line.
     var HeaderFullW:Single:=0;
     // HeaderWordW  - widest single word (the tightest a wrapping header can be).
@@ -3761,7 +3852,7 @@ begin
   // reconcile the total against the available viewport width: hand spare
   // horizontal space back to wrapped columns (so they wrap less), or, on
   // overflow, shrink them proportionally toward their word floor to fit.
-  if FConservativeWrap and GridHaveWordWrap and (FColCount>0) then
+  if FConservativeWrap and GridHaveWordWrap and (FColumns.Count>0) then
     ReconcileWrappedColumns(ColIsWrapped, ColWordFloor, ColNaturalW, VP);
 
   // Header heights must follow the (possibly wrap-narrowed) column widths.
@@ -3771,7 +3862,7 @@ begin
   // column whose caption wrapped onto more lines than typical is widened in a
   // single pass straight to its one-line width, so the over-tall header band
   // shrinks back toward balance. The pass re-fits header heights itself.
-  if FHeaderWordWrap and (FHeaderLevels.Count>0) and (FColCount>0) then
+  if FHeaderWordWrap and (FHeaderLevels.Count>0) and (FColumns.Count>0) then
     BalanceHeaderColumnWidths;
 
   Invalidate;
@@ -3804,10 +3895,10 @@ begin
   var Total:=0;
   var GrowHeadroom:Single:=0;  // sum of (natural - current) over wrapped cols
   var ShrinkHeadroom:Single:=0;// sum of (current - floor)   over wrapped cols
-  for i:=0 to FColCount-1 do begin
-    Total:=Total+FColData[i].Widths;
+  for i:=0 to FColumns.Count-1 do begin
+    Total:=Total+FColData[i].Width;
     if AIsWrapped[i] then begin
-      var Cur:=FColData[i].Widths;
+      var Cur:=FColData[i].Width;
       var Cap:=ANaturalW[i];
       // Respect an explicit per-column MaxWidth as the real upper bound.
       if (FColData[i].MaxWidth>0) and (Cap>FColData[i].MaxWidth) then
@@ -3826,9 +3917,9 @@ begin
     // width (or MaxWidth), so we stop wrapping rather than over-stretch.
     var Spare:Single:=Avail-Total;
     if Spare>GrowHeadroom then Spare:=GrowHeadroom; // don't grow past natural
-    for i:=0 to FColCount-1 do begin
+    for i:=0 to FColumns.Count-1 do begin
       if not AIsWrapped[i] then Continue;
-      var Cur:=FColData[i].Widths;
+      var Cur:=FColData[i].Width;
       var Cap:=Min(ANaturalW[i],Max(FMaxColumnAutoWidth,FColData[i].MaxWidth));
       var Room:=Cap-Cur;
       if Room<=0 then Continue;
@@ -3842,9 +3933,9 @@ begin
     // intact and the rest wraps).
     var Excess:Single:=Total-Avail;
     if Excess>ShrinkHeadroom then Excess:=ShrinkHeadroom; // can't reclaim more
-    for i:=0 to FColCount-1 do begin
+    for i:=0 to FColumns.Count-1 do begin
       if not AIsWrapped[i] then Continue;
-      var Cur:=FColData[i].Widths;
+      var Cur:=FColData[i].Width;
       var Room:=Cur-AWordFloor[i];
       if Room<=0 then Continue;
       var Cut:=Round(Excess*(Room/ShrinkHeadroom));
@@ -3897,7 +3988,7 @@ var
   i, lvl: Integer;
 begin
   Result:=False;
-  if FColCount<=0 then Exit;
+  if FColumns.Count<=0 then Exit;
 
   var CellPaddingWidth:=CellPadding.Left+CellPadding.Right;
   var CellDelimterWidth:=FGridLineWidth/2;
@@ -3907,17 +3998,17 @@ begin
   // single-line width its widest-wrapping caption would need (the growth cap).
   // Also remember WHICH element drives that worst count, so we can re-measure its
   // caption at trial widths when deciding how far to widen.
-  var ColLines: TArray<Integer>;  SetLength(ColLines, FColCount);
-  var ColOneLineW: TArray<Single>; SetLength(ColOneLineW, FColCount);
-  var ColElement: TArray<THeaderElement>; SetLength(ColElement, FColCount);
+  var ColLines: TArray<Integer>;  SetLength(ColLines, FColumns.Count);
+  var ColOneLineW: TArray<Single>; SetLength(ColOneLineW, FColumns.Count);
+  var ColElement: TArray<THeaderElement>; SetLength(ColElement, FColumns.Count);
   // Width contributed by the OTHER columns of the worst element's span (0 for a
   // single-column header). Added to a trial column width to get the element's
   // total text width when re-measuring.
-  var ColSpanOther: TArray<Single>; SetLength(ColSpanOther, FColCount);
+  var ColSpanOther: TArray<Single>; SetLength(ColSpanOther, FColumns.Count);
   var MaxLines:=1;
   var SumLines:=0;
 
-  for i:=0 to FColCount-1 do begin
+  for i:=0 to FColumns.Count-1 do begin
     ColLines[i]:=1;
     ColOneLineW[i]:=0;
     ColElement[i]:=nil;
@@ -3937,7 +4028,7 @@ begin
           // HeaderElementTextWidth apply (Left+Right padding + full grid line).
           var TextInset:=CellPadding.Left+CellPadding.Right+FGridLineWidth;
           var TotalTextW:=HeaderElementTextWidth(lvl, i);
-          ColSpanOther[i]:=Max(0, TotalTextW-(FColData[i].Widths-TextInset));
+          ColSpanOther[i]:=Max(0, TotalTextW-(FColData[i].Width-TextInset));
 
           Canvas.Font.Assign(FCellFont);
           if Element.Style.FontNameIsSet then Canvas.Font.Family:=Element.Style.FontName;
@@ -3962,7 +4053,7 @@ begin
 
   // The "typical" line count is the AVERAGE rounded up. A column must wrap onto
   // substantially more lines than this to be considered over-tall.
-  var Threshold:=Ceil(SumLines/FColCount);
+  var Threshold:=Ceil(SumLines/FColumns.Count);
   if Threshold<1 then Threshold:=1;
 
   // A column is treated as over-tall only when it wraps onto more than
@@ -3974,12 +4065,12 @@ begin
   const AllowedExcess = 3;
   var TargetLines:=Max(2,Threshold+AllowedExcess);
 
-  for i:=0 to FColCount-1 do begin
+  for i:=0 to FColumns.Count-1 do begin
     if ColLines[i]<=Threshold+AllowedExcess then Continue; // not over-tall
     if ColLines[i]<3 then Continue;
     if not Assigned(ColElement[i]) then Continue;
 
-    var Cur:=FColData[i].Widths;
+    var Cur:=FColData[i].Width;
 
     var Cap:=ColOneLineW[i];
     var ColMax:=Max(FMaxColumnAutoWidth,FColData[i].MaxWidth);
@@ -4028,7 +4119,7 @@ begin
     var Target:=Hi;
     if Target>Cur+1 then begin
       ColWidths[i]:=Round(Target);
-      if FColData[i].Widths<>Round(Cur) then Result:=True;
+      if FColData[i].Width<>Round(Cur) then Result:=True;
     end;
   end;
 
@@ -4069,7 +4160,7 @@ begin
     var ViewBottomCell:=ViewBottom;
 
     var ComputeMode:=TSizeComputeMode.cmSlow;
-    if FRowCount*FColCount>10000 then begin
+    if FRowCount*FColumns.Count>10000 then begin
       ComputeMode:=TSizeComputeMode.cmFast;
     end;
     if FAutoSizePrecise then begin
@@ -4083,7 +4174,7 @@ begin
       FResizeStartColumnIndex:=0;
     end;
     if FResizeEndColumnIndex<0 then begin
-      FResizeEndColumnIndex:=FColCount-1;
+      FResizeEndColumnIndex:=FColumns.Count-1;
     end;
 
     Canvas.Font.Assign(FCellFont);
@@ -4266,7 +4357,7 @@ begin
     // Check for a click on the headers
     for i:=0 to FHeaderLevels.Count-1 do begin
       j:=0;
-      while j<FColCount do begin
+      while j<FColumns.Count do begin
         Rect:=GetHeaderRect(i, j);
         if Rect.Contains(PointF(X, Y)) then begin
           // Check whether this is a merged cell
@@ -4282,7 +4373,7 @@ begin
           Continue;
         end;
         var ColSpan:=Element.ColSpan;
-        if ColSpan<0 then ColSpan:=FColCount-i;
+        if ColSpan<0 then ColSpan:=FColumns.Count-i;
         if ColSpan<1 then ColSpan:=1; // never advance by 0 -> no infinite loop
         j:=j+ColSpan;
       end;
@@ -4295,7 +4386,7 @@ begin
 
     for j:=TopRow to FRowCount-1 do begin
       if FRowData[j].Top>ViewBottom then Break;
-      for i:=0 to FColCount-1 do begin
+      for i:=0 to FColumns.Count-1 do begin
         Rect:=GetCellRect(i, j);
         if Rect.Contains(PointF(X, Y)) then begin
           FLastClickIsOnCell:=True;
@@ -4562,7 +4653,7 @@ begin
       OldCol:=NewCol;
       OldRow:=NewRow;
 
-      NewCol:=Max(0, Min(FColCount-1, NewCol+DX));
+      NewCol:=Max(0, Min(FColumns.Count-1, NewCol+DX));
       // On-demand grids only know FRowCount rows fetched so far. When moving
       // down, give a descendant the chance to fetch the target row first so the
       // clamp below does not stop at the fetched boundary. No-op on base grids.
@@ -4835,6 +4926,7 @@ procedure TMultiHeaderGrid.SetGridLineWidth(const Value: Single);
 begin
   if FGridLineWidth<>Value then begin
     FGridLineWidth:=Value;
+    UpdateSize;
     Invalidate;
   end;
 end;
@@ -5010,7 +5102,7 @@ end;
 
 procedure TMultiHeaderGrid.SetViewLeft(const Value: integer);
 begin
-  var LastColLeft:=FullTableWidth-FColData[FColCount-1].Widths;
+  var LastColLeft:=FullTableWidth-FColData[FColumns.Count-1].Width;
   FViewLeft:=Min(LastColLeft,Max(0,Value));
 
   var Event:=HScrollBar.OnChange;
@@ -5051,7 +5143,7 @@ function TMultiHeaderGrid.CanEditCell(ACol, ARow: Integer): Boolean;
 begin
   // An editor may open on any in-range cell, even when ReadOnly, so its text
   // can be selected and copied. Whether edits are accepted is CellIsModifiable.
-  Result:=(ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
+  Result:=(ACol>=0) and (ACol<FColumns.Count) and (ARow>=0) and (ARow<FRowCount);
 end;
 
 function TMultiHeaderGrid.CellIsModifiable(ACol, ARow: Integer): Boolean;
@@ -5059,7 +5151,7 @@ begin
   // Base/string grids accept edits unless ReadOnly. Descendants tighten this
   // (the DB grid also checks DataSet.CanModify and the field's ReadOnly).
   Result:=(not FReadOnly) and
-          (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount);
+          (ACol>=0) and (ACol<FColumns.Count) and (ARow>=0) and (ARow<FRowCount);
 end;
 
 procedure TMultiHeaderGrid.ApplyEditorReadOnly(Ed: TControl; AModifiable: Boolean);
@@ -5105,14 +5197,14 @@ begin
   if FEditing then CancelEditing;
   RowCount:=FRowCount+1;
   for var R:=FRowCount-1 downto ARow+1 do
-    for var C:=0 to FColCount-1 do begin
+    for var C:=0 to FColumns.Count-1 do begin
       Cells[C,R]:=Cells[C,R-1];
       CellStyle[C,R]:=CellStyle[C,R-1];
     end;
-  for var C:=0 to FColCount-1 do
+  for var C:=0 to FColumns.Count-1 do
     Cells[C,ARow]:='';
 
-  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), ARow);
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColumns.Count-1), ARow);
   AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
@@ -5128,10 +5220,10 @@ begin
 
   if FEditing then CommitEditing;
   RowCount:=FRowCount+1;
-  for var C:=0 to FColCount-1 do
+  for var C:=0 to FColumns.Count-1 do
     Cells[C,FRowCount-1]:='';
 
-  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), FRowCount-1);
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColumns.Count-1), FRowCount-1);
   AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
@@ -5161,13 +5253,13 @@ begin
 
   if FEditing then CancelEditing;
   for var R:=ARow to FRowCount-2 do
-    for var C:=0 to FColCount-1 do begin
+    for var C:=0 to FColumns.Count-1 do begin
       Cells[C,R]:=Cells[C,R+1];
       CellStyle[C,R]:=CellStyle[C,R+1];
     end;
   RowCount:=FRowCount-1;
 
-  FSelectedCell:=Point(Min(FSelectedCell.X,FColCount-1), Min(ARow,FRowCount-1));
+  FSelectedCell:=Point(Min(FSelectedCell.X,FColumns.Count-1), Min(ARow,FRowCount-1));
   AutoSizeVisibleRows;
   UpdateSize;
   ScrollToSelectedCell;
@@ -5290,7 +5382,7 @@ begin
   // Base: write the editor text straight into the cell.
   var NewText:=GetEditorText;
   Result:=True;
-  if (ACol>=0) and (ACol<FColCount) and (ARow>=0) and (ARow<FRowCount) then
+  if (ACol>=0) and (ACol<FColumns.Count) and (ARow>=0) and (ARow<FRowCount) then
     if Cells[ACol,ARow]<>NewText then begin
       Cells[ACol,ARow]:=NewText; // SetCells fires OnSetCellText / invalidates
       // The new content may need more (or fewer) lines, so re-fit the row
@@ -5643,7 +5735,7 @@ begin
         CommitEditing;
         // Move selection to the next/previous cell.
         var NewCol:=FSelectedCell.X+IfThen(ssShift in Shift,-1,1);
-        if (NewCol>=0) and (NewCol<FColCount) then
+        if (NewCol>=0) and (NewCol<FColumns.Count) then
           SelectedCell:=Point(NewCol,FSelectedCell.Y);
         Key:=0;
         KeyChar:=#0;
@@ -5964,7 +6056,7 @@ begin
           );
 
           var ColSpan:=FHeaderLevels[i][j].ColSpan;
-          if ColSpan<0 then ColSpan:=FColCount-i;
+          if ColSpan<0 then ColSpan:=FColumns.Count-i;
 
           if ResizeRect.Contains(PointF(X, Y)) then begin
             AStartCol:=Col;
@@ -5988,7 +6080,7 @@ begin
           // suppressed border of a merged title stack - don't expose a
           // row-resize handle there.
           var ColSpan:=FHeaderLevels[i][j].ColSpan;
-          if ColSpan<0 then ColSpan:=FColCount-i;
+          if ColSpan<0 then ColSpan:=FColumns.Count-i;
 
           if HeaderCellIsFiller(i, Col+FHeaderLevels[i][j].ColSkip) then begin
             Col:=Col+ColSpan;
@@ -6365,7 +6457,7 @@ end;
 
 function TMultiHeaderGrid.GetColWordWrap(Index: Integer): Boolean;
 begin
-  if (Index>=0) and (Index<FColCount) then
+  if (Index>=0) and (Index<Length(FColData)) then
     Result:=FColData[Index].WordWrap
   else
     Result:=False;
@@ -6373,7 +6465,7 @@ end;
 
 procedure TMultiHeaderGrid.SetColWordWrap(Index: Integer; const Value: Boolean);
 begin
-  if (Index>=0) and (Index<FColCount) and (FColData[Index].WordWrap<>Value) then begin
+  if (Index>=0) and (Index<Length(FColData)) and (FColData[Index].WordWrap<>Value) then begin
     FColData[Index].WordWrap:=Value;
     // This column's cells now wrap (or stop wrapping), changing row heights.
     // Skipped during a bulk rebuild (it applies wrap to every column in a loop
@@ -6753,7 +6845,7 @@ begin
 
   var Fields:=GetVisibleFields;
   for var i:=0 to High(Fields) do begin
-    if SameText(Fields[i].FieldName,FieldName) then Exit(Column(i));
+    if (Fields[i]<>nil) and SameText(Fields[i].FieldName,FieldName) then Exit(Column(i));
   end;
   Result:=nil;
 end;
@@ -6880,7 +6972,7 @@ begin
   if ACol>High(Fields) then Exit;
 
   var Field:=Fields[ACol];
-  if Field.ReadOnly then Exit;
+  if (Field=nil) or Field.ReadOnly then Exit;
 
   if ARow=DS.RecNo-1 then begin
     // The DataSet's current record already matches this grid row -
@@ -6957,12 +7049,57 @@ begin
   InvalidateTable;
 end;
 
+procedure TMultiHeaderDBGrid.InitNewColumn(ACol: TMHGHeaderColumn);
+// Binds a column grown in via ColCount to a DataSet field. The search starts
+// just past the field the previous column already uses (so appended columns
+// walk forward through the field list); if that field is not found the search
+// starts at the first field. A field already used by another column is
+// skipped; when none remain, FieldName/Title are left blank.
+begin
+  inherited InitNewColumn(ACol);
+
+  exit;
+  var DBCol:=ACol as TMHGColumn;
+
+  var DS:=DataSet;
+  if (DS=nil) or (DS.FieldCount=0) then Exit;
+
+  // Fields already claimed by existing columns (case-insensitive).
+  var Used:=TDictionary<string,Boolean>.Create;
+  try
+    for var i:=0 to Columns.Count-1 do begin
+      if Columns[i]=DBCol then Continue;
+      var FN:=Columns[i].FieldName;
+      if FN<>'' then Used.AddOrSetValue(AnsiLowerCase(FN),True);
+    end;
+
+    // Base index: one past the previous column's field, else the first field.
+    var Start:=0;
+    if DBCol.Index>0 then begin
+      var PrevF:=DS.FindField(Columns[DBCol.Index-1].FieldName);
+      if PrevF<>nil then Start:=PrevF.Index+1;
+    end;
+
+    for var Step:=0 to DS.FieldCount-1 do begin
+      var Idx:=(Start+Step) mod DS.FieldCount;
+      var F:=DS.Fields[Idx];
+      if not Used.ContainsKey(AnsiLowerCase(F.FieldName)) then begin
+        DBCol.FieldName:=F.FieldName;
+        if DBCol.Title='' then DBCol.Title:=F.DisplayName;
+        Exit;
+      end;
+    end;
+  finally
+    Used.Free;
+  end;
+end;
+
 function TMultiHeaderDBGrid.ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
-// Produces the ordered list of effective columns and the matching fields.
-// The Columns collection is authoritative: it always drives the layout
-// (column order, titles, grouping). An empty Columns collection means an
-// empty grid - use AutoCreateColumns / the editor's Import to (re)populate
-// from the DataSet's visible fields.
+// Produces the ordered column list and the matching fields, one entry per
+// Columns item (ColCount = Columns.Count). Every item keeps its slot: a hidden
+// column and a column whose FieldName does not resolve both stay in place. The
+// paired field is nil when the name does not resolve (the slot then renders
+// empty); hidden columns are collapsed to zero width later by BuildGroupedHeader.
 begin
   AFields:=nil;
   Result:=nil;
@@ -6970,22 +7107,12 @@ begin
   var DS:=DataSet;
   if DS=nil then Exit;
 
-  // Columns-driven, always. Skip invisible columns and columns whose
-  // FieldName does not resolve to a real field.
   SetLength(Result,Columns.Count);
   SetLength(AFields,Columns.Count);
-  var Cnt:=0;
   for var i:=0 to Columns.Count-1 do begin
-    var Col:=Columns[i];
-    if not Col.Visible then Continue;
-    var F:=DS.FindField(Col.FieldName);
-    if F=nil then Continue;
-    Result[Cnt]:=Col;
-    AFields[Cnt]:=F;
-    Inc(Cnt);
+    Result[i]:=Columns[i];
+    AFields[i]:=DS.FindField(Columns[i].FieldName); // nil if unresolved
   end;
-  SetLength(Result,Cnt);
-  SetLength(AFields,Cnt);
 end;
 
 function TMultiHeaderDBGrid.GetVisibleFields: TArray<TField>;
@@ -7140,8 +7267,8 @@ end;
 
 procedure TMultiHeaderDBGrid.ResetTable;
 begin
-  // Guard against re-entrancy: building the header changes ColCount/
-  // column widths, none of which should trigger another rebuild.
+  // Guard against re-entrancy: building the header changes column widths and
+  // geometry, none of which should trigger another rebuild.
   if FRebuildingHeader then Exit;
   FRebuildingHeader:=True;
   try
@@ -7149,19 +7276,25 @@ begin
     FCachedRowCount:=-1; // cache emptied; force the next UpdateRowCount to rebuild
     var DS:=DataSet;
     if (DS=nil) or (not DS.Active) then begin
+      // Closed: keep the current Columns and their header intact - a close is
+      // not a structural change. Just drop the data rows (no active dataset to
+      // read) and size internal geometry to match. Only when the grid has no
+      // columns at all do we show the component-name placeholder header.
       FColMap:=nil;
-      ColCount:=5;
-      RowCount:=1;
-      Header.Clear;
-      Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+      EnsureColData;
+      if FColumns.Count=0 then begin
+        Header.Clear;
+        Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+      end;
+      UpdateRowCount; // dataset closed -> RowCount:=0, cache cleared
       Exit;
     end;
 
     var Fields: TArray<TField>;
-    var Cols:=ResolveColumns(Fields);
+    var Cols:=ResolveColumns(Fields); // one entry per Columns item; ColCount=Columns.Count
     FColMap:=Cols; // cache for O(1) per-cell colour lookup in DoGetCellStyle
 
-    ColCount:=Length(Fields);
+    EnsureColData; // size geometry to Columns.Count (never mutates the collection)
     if ColCount=0 then begin
       FColMap:=nil;
       Header.Clear;
@@ -7170,12 +7303,15 @@ begin
       Exit;
     end;
 
-    // Compute the layout signature (which fields, in what order) BEFORE the
-    // rebuild, so we know whether this is a structural change or a pure
-    // re-apply (e.g. a Min/MaxWidth toggle).
+    // Compute the layout signature (which columns/fields, in what order) BEFORE
+    // the rebuild, so we know whether this is a structural change or a pure
+    // re-apply (e.g. a Min/MaxWidth or Visible toggle). Use the column FieldName
+    // (always present) so unresolved columns still contribute a stable signature.
+    // Visibility is deliberately excluded: hiding/showing a column changes only
+    // its width, not the field set or order, so it must not re-fit header heights.
     var Layout:='';
-    for var i:=0 to High(Fields) do
-      Layout:=Layout+Fields[i].FieldName+';';
+    for var i:=0 to High(Cols) do
+      Layout:=Layout+Cols[i].FieldName+';';
     var LayoutChanged:=Layout<>FLastColLayout;
     FLastColLayout:=Layout;
 
@@ -7199,9 +7335,6 @@ begin
         for var i:=0 to ColCount-1 do begin
           var Col:=Cols[i];
           if Col=nil then Continue;
-          // Initial width only on a fresh/changed layout; otherwise the live
-          // (user-dragged) width stands.
-          if LayoutChanged and (Col.Width>0) then ColWidths[i]:=Col.Width;
           if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
           if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
           // When a column drops its limits (Min/Max back to 0), restore the
@@ -7210,6 +7343,15 @@ begin
           ColWordWrap[i]:=Col.WordWrap;
           ColTextHAlignment[i]:=Col.Alignment;
           ColTextVAlignment[i]:=Col.VertAlignment;
+          // A hidden column keeps its user Width but collapses to zero internal
+          // width (no space, not painted). When visible it takes its declared
+          // Width on a fresh/changed layout or when it is coming back from
+          // hidden (internal width still 0); otherwise the live (user-dragged)
+          // width stands.
+          if not Col.Visible then
+            FColData[i].Width:=0
+          else if (Col.Width>0) and (LayoutChanged or (GetColWidth(i)<=0)) then
+            ColWidths[i]:=Col.Width;
         end;
       finally
         FSuppressAutoSize:=False;
@@ -7262,8 +7404,9 @@ procedure TMultiHeaderDBGrid.BuildGroupedHeader(const AFields: TArray<TField>;
 // Generates the stacked group-header rows (UniGUI-style) plus the
 // final title row from the Columns collection.
 //
-// AFields and ACols are the already-resolved (visible, field-matched)
-// parallel arrays produced by ResolveColumns, of equal length.
+// AFields and ACols are the parallel arrays produced by ResolveColumns, one
+// entry per Columns item and of equal length. A nil AFields[i] means that
+// column's FieldName did not resolve; its header falls back to the column Title.
 var
   Paths: TArray<TArray<string>>;
 begin
@@ -7298,7 +7441,7 @@ begin
   // This keeps every row perfectly column-aligned regardless of how
   // groups, ungrouped columns and differing depths are interleaved.
   for var Level:=0 to MaxDepth-1 do begin
-    var Row:=Header.AddRow(30);
+    var Row:=Header.AddRow(DefaultRowHeight);
     var Col:=0;
     while Col<N do begin
       // No group caption for this column at this level -> blank filler.
@@ -7331,9 +7474,10 @@ begin
   // Final row: the column titles themselves. One element per column,
   // so column index lines up with header element index (Column(i)
   // continues to return the title element of column i).
-  var TitleRow:=Header.AddRow(30);
+  var TitleRow:=Header.AddRow(DefaultRowHeight);
   for var i:=0 to N-1 do begin
-    var Caption:=AFields[i].DisplayLabel;
+    var Caption:='';
+    if AFields[i]<>nil then Caption:=AFields[i].DisplayLabel;
     if (ColObjs<>nil) and (ColObjs[i].Title<>'') then
       Caption:=ColObjs[i].Title;
     var El:=TitleRow.AddColumn(Caption);
@@ -7377,7 +7521,8 @@ begin
   FNativeAllFetched:=False;
 
   if not ((DataSet<>nil) and DataSet.Active) then begin
-    // Closed: keep current columns; just rebuild (shows placeholder if empty).
+    // Closed: keep the existing columns and header; ResetTable just drops the
+    // rows (or shows the placeholder if the grid has no columns at all).
     ResetTable;
     Exit;
   end;
