@@ -1,12 +1,21 @@
-Delphi FMX VCL-like Grid.
+Delphi FMX VCL-like Grids.
 
-Support headers, merged cells and styles.  
+Features:
+- Multilevel headers
+- merged cells
+- cell and header styles
+- custom render events for cells
+- column and row sizing
+- autosize
+- word wrapping
+- DBAware
+- Inline editors
 
 > [!CAUTION]
 > **Work in progress**
 > Component is in development. Expect heavy refactoring and broken features.
 
-**TMultiHeaderDBGrid** - show grid from TDataSource (from TDataSet).  
+**TMultiHeaderDBGrid** - Classic DB Aware grid. Linked with TDataSet's through TDataSource.  
  
 ![alt text](https://raw.githubusercontent.com/rgreat/FMX.MultiHeaderGrid/refs/heads/main/Images/TMultiHeaderDBGrid.png)
 
