@@ -7058,7 +7058,6 @@ procedure TMultiHeaderDBGrid.InitNewColumn(ACol: TMHGHeaderColumn);
 begin
   inherited InitNewColumn(ACol);
 
-  exit;
   var DBCol:=ACol as TMHGColumn;
 
   var DS:=DataSet;
