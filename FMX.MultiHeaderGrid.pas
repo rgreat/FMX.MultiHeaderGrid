@@ -3496,7 +3496,7 @@ begin
   end;
 
   for i:=0 to FHeaderLevels.Count-1 do
-    FHeaderLevels[i].Height:=Trunc(LevelHeight[i]);
+    FHeaderLevels[i].Height:=Max(Ceil(BaseTH),Trunc(LevelHeight[i]));
 
   Invalidate;
 end;
@@ -5304,7 +5304,7 @@ begin
     FFitColumnsIntoView:=Value;
     // Enabling it fills the current empty space right away (not only on the next
     // resize / autosize), so the effect is immediate when set at runtime.
-    if Value and (FColumns.Count>0) and not (csLoading in ComponentState) then begin
+    if Value and (FColumns.Count>0) then begin
       FitColumnsToViewport(ViewPortWidth);
       AutoSizeHeaders;
       Invalidate;
