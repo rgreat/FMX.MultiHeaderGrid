@@ -273,6 +273,11 @@ type
 
   FColData = record
     Width          : integer;
+    // Content-fit width from the most recent AutoSizeCols pass. Used by
+    // FitColumnsToViewport as the shrink floor so the fill can grow columns to
+    // fill the viewport yet always shrink them back to their content width (and
+    // no further) when the viewport narrows.
+    ContentWidth   : integer;
     MinWidth       : integer;
     MaxWidth       : integer;
     TextVAlignment : TTextAlign;
@@ -447,6 +452,10 @@ type
       // synchronous on-demand grow; the DB descendant pages to Eof separately.
       FEndJump: boolean;
       FMaxColumnAutoWidth: integer;
+      // When set, AutoSizeCols distributes any leftover viewport width across
+      // columns so they fill the whole viewport (bounded by column Min/MaxWidth).
+      FFitColumnsIntoView: Boolean;
+      FInFitColumns: Boolean;               // re-entrancy guard for fit-on-resize
       FFetchesOnDemand: Boolean;            // cached: dataset fetches rows lazily (FetchOptions.Mode)
       // Grid would automatically try to keep rows & columns autsized to fit data
       FKeepRowsAutoSized: Boolean;
@@ -669,6 +678,7 @@ type
     procedure SetConservativeWrap(const Value: Boolean);
     procedure SetKeepColumnsAutoSized(const Value: Boolean);
     procedure SetKeepRowsAutoSized(const Value: Boolean);
+    procedure SetFitColumnsIntoView(const Value: Boolean);
 
     // ConservativeWrap helper: after AutoSizeCols has sized wrapped columns to
     // their word width, redistribute against the viewport - give spare width
@@ -677,6 +687,10 @@ type
     procedure ReconcileWrappedColumns(const AIsWrapped: TArray<Boolean>;
                                       const AWordFloor, ANaturalW: TArray<Single>;
                                       AViewportW: Integer);
+    // Distributes leftover viewport width across columns so they fill the whole
+    // viewport. Each column is bounded by its own MaxWidth; iterates so freed-up
+    // slack from maxed-out columns is redistributed to the rest.
+    procedure FitColumnsToViewport(AViewportW: Integer);
     // After the header heights are known, find columns whose caption wrapped onto
     // substantially more lines than the typical column (average line count rounded
     // up) and widen them just enough to bring them down toward typical height -
@@ -898,6 +912,11 @@ type
     // Grid would automatically try to keep rows & columns autsized to fit data
     property KeepColumnsAutoSized: Boolean read FKeepColumnsAutoSized write SetKeepColumnsAutoSized default True;
     property KeepRowsAutoSized: Boolean read FKeepRowsAutoSized write SetKeepRowsAutoSized default True;
+
+    // When True, AutoSizeCols expands columns to fill the whole viewport width
+    // after content sizing, distributing spare space proportionally (each column
+    // still bounded by its own Min/MaxWidth). Off by default.
+    property FitColumnsIntoView: Boolean read FFitColumnsIntoView write SetFitColumnsIntoView default False;
 
     // Maximum width of the column for autowidth computing
     // Can be overriden by MaxWidth property of  the column.
@@ -1810,6 +1829,7 @@ begin
   FGridLineWidth:=1;
   FSelectedCell:=Point(-1, -1);
   FMaxColumnAutoWidth:=400;
+  FFitColumnsIntoView:=False;
   FKeepRowsAutoSized:=True;
   FKeepColumnsAutoSized:=True;
   FReadOnly:=True;
@@ -1983,10 +2003,14 @@ end;
 procedure TMultiHeaderGrid.SetColMaxWidth(Index: Integer; const Value: integer);
 begin
   if (Index>=0) and (Index<Length(FColData)) then begin
-    FColData[Index].MaxWidth:=Max(Value,FColData[Index].MinWidth);
+    // 0 means "no maximum". Otherwise the cap can't be below MinWidth.
+    if Value<=0 then
+      FColData[Index].MaxWidth:=0
+    else
+      FColData[Index].MaxWidth:=Max(Value,FColData[Index].MinWidth);
     // A max constraint only shrinks an over-wide column; columns already
     // within range are left untouched.
-    if FColData[Index].Width>FColData[Index].MaxWidth then
+    if (FColData[Index].MaxWidth>0) and (FColData[Index].Width>FColData[Index].MaxWidth) then
       FColData[Index].Width:=FColData[Index].MaxWidth;
     Invalidate;
   end;
@@ -1995,7 +2019,14 @@ end;
 procedure TMultiHeaderGrid.SetColMinWidth(Index: Integer; const Value: integer);
 begin
   if (Index>=0) and (Index<Length(FColData)) then begin
-    FColData[Index].MinWidth:=Min(Value,FColData[Index].MaxWidth);
+    // 0 means "no minimum". Only clamp against MaxWidth when a max is set
+    // (MaxWidth=0 means unbounded and must not pull MinWidth down to 0).
+    if Value<=0 then
+      FColData[Index].MinWidth:=0
+    else if FColData[Index].MaxWidth>0 then
+      FColData[Index].MinWidth:=Min(Value,FColData[Index].MaxWidth)
+    else
+      FColData[Index].MinWidth:=Value;
     // A min constraint only grows an under-wide column; columns already
     // within range are left untouched.
     if FColData[Index].Width<FColData[Index].MinWidth then
@@ -2144,9 +2175,17 @@ begin
     if FColData[Index].MaxWidth>0 then begin
       FColData[Index].Width:=Min(FColData[Index].Width,FColData[Index].MaxWidth);
     end;
-    if FColData[Index].MinWidth>0 then begin
-      FColData[Index].Width:=Max(FColData[Index].Width,FColData[Index].MinWidth);
-    end;
+    // Floor at the column's MinWidth, or the 10px absolute minimum when no
+    // MinWidth is set (0 = "no explicit minimum", not "allow zero width"). This
+    // matches the drag-resize paths, so no resize route can produce a sub-10
+    // column.
+    FColData[Index].Width:=Max(FColData[Index].Width,Max(10,FColData[Index].MinWidth));
+    // The clamped width becomes the column's content/shrink floor: a user drag
+    // or an external ColWidths[] write is an intended width, so FitColumnsToViewport
+    // must respect it (grow above it, shrink back to but not below it). The fill
+    // itself writes FColData[].Width directly and does NOT pass through here, so
+    // this never captures a fill-inflated width - no ratchet.
+    FColData[Index].ContentWidth:=FColData[Index].Width;
     for var i:=0 to High(FRowData) do begin
       if FRowData[i].AutoSized then FRowData[i].AutoSized:=False;
     end;
@@ -3206,8 +3245,12 @@ begin
   FSuppressAutoSize:=True;
   try
     for var i:=0 to N-1 do begin
-      if ACols[i].MinWidth>0 then ColMinWidth[i]:=ACols[i].MinWidth;
-      if ACols[i].MaxWidth>0 then ColMaxWidth[i]:=ACols[i].MaxWidth;
+      // Propagate bounds unconditionally: 0 means "no limit", so a column that
+      // clears a previously-set Min/MaxWidth must push that 0 through too. Max
+      // is applied before Min so the Min setter clamps against the new Max, not
+      // a stale one.
+      ColMaxWidth[i]:=ACols[i].MaxWidth;
+      ColMinWidth[i]:=ACols[i].MinWidth;
       ColWordWrap[i]:=ACols[i].WordWrap;
       ColTextHAlignment[i]:=ACols[i].Alignment;
       ColTextVAlignment[i]:=ACols[i].VertAlignment;
@@ -3860,6 +3903,23 @@ begin
   if FHeaderWordWrap and (FHeaderLevels.Count>0) and (FColumns.Count>0) then
     BalanceHeaderColumnWidths;
 
+  // Snapshot the content-fit width of every column NOW - after content/header
+  // sizing and balancing but before the viewport fill. FitColumnsToViewport uses
+  // this as its shrink floor, so it can grow columns to fill spare space yet
+  // always shrink them back to (never below) their content width when the
+  // viewport narrows again. Without this snapshot the fill would read the already
+  // grown width and ratchet - never shrinking back.
+  for i:=0 to FColumns.Count-1 do
+    FColData[i].ContentWidth:=FColData[i].Width;
+
+  // Stretch columns to fill the viewport when requested. Runs LAST so it is the
+  // authoritative final word on widths - header balancing above may have grown
+  // some columns, and this reconciles the whole row back to the viewport.
+  if FFitColumnsIntoView and (FColumns.Count>0) then begin
+    FitColumnsToViewport(VP);
+    AutoSizeHeaders; // widths changed again; re-fit header heights to match
+  end;
+
   Invalidate;
 end;
 
@@ -3937,6 +3997,134 @@ begin
       if Cut>Room then Cut:=Round(Room);
       if Cut>0 then ColWidths[i]:=Cur-Cut;
     end;
+  end;
+end;
+
+procedure TMultiHeaderGrid.FitColumnsToViewport(AViewportW: Integer);
+// Grows OR shrinks columns so their total fills the viewport width, distributing
+// the difference proportionally to current width and bounded by each column's
+// Min/MaxWidth. Because settling the widths can toggle the vertical scrollbar
+// (which changes ViewPortWidth), the distribution is repeated against the
+// re-measured viewport until it is stable (at most a couple of passes).
+//
+// This runs right after AutoSizeCols, which snapshots each column's content-fit
+// width into FColData[].ContentWidth. That snapshot is the SHRINK floor: the
+// fill grows columns freely to fill spare space, but when the viewport is too
+// narrow it will not shrink a column below what its content needs - past that
+// point the horizontal scrollbar appears instead of crushing columns into
+// unreadable slivers. Using the snapshot (not the live width) means a grown
+// column can shrink back to its content width when the viewport narrows again.
+var
+  i: Integer;
+begin
+  if FColumns.Count=0 then Exit;
+
+  var Attempt:=0;
+  while Attempt<3 do begin
+    Inc(Attempt);
+
+    // Current available width. Prefer the live ViewPortWidth (reflects whether
+    // the vertical scrollbar is showing after the previous pass) over the value
+    // captured by the caller.
+    var VPW:=ViewPortWidth;
+    if VPW<=0 then VPW:=AViewportW;
+    if VPW<=0 then Exit;
+
+    // Target = viewport minus a 1px hair so a filled row never trips the
+    // horizontal scrollbar.
+    var Target:=VPW-1;
+    if Target<=0 then Exit;
+
+    // Per-column bounds. Lo[i] is the SHRINK floor: the largest of the 10px
+    // absolute minimum, the column's MinWidth, and its content-fit width. Fill
+    // grows columns freely (growth only clamps to Hi), but never shrinks one
+    // below what its content needs - excess narrowing shows the H-scrollbar
+    // instead of crushing columns. Hi[i]=MaxInt when uncapped.
+    var Lo: TArray<Integer>; SetLength(Lo, FColumns.Count);
+    var Hi: TArray<Integer>; SetLength(Hi, FColumns.Count);
+    for i:=0 to FColumns.Count-1 do begin
+      Lo[i]:=Max(Max(10,FColData[i].MinWidth),Max(10,FColData[i].ContentWidth));
+      Hi[i]:=FColData[i].MaxWidth;
+      if Hi[i]<=0 then Hi[i]:=MaxInt;
+      if Lo[i]>Hi[i] then Lo[i]:=Hi[i]; // explicit MaxWidth below content wins
+    end;
+
+    var Total:=0;
+    for i:=0 to FColumns.Count-1 do
+      Total:=Total+FColData[i].Width;
+
+    if Total=Target then Break; // already exact; nothing to do
+
+    // Iterate: distribute the remaining delta across columns that still have
+    // room in the needed direction, proportional to current width. Columns that
+    // hit a bound drop out; their share is re-spread on the next pass.
+    var Guard:=0;
+    while (Total<>Target) and (Guard<128) do begin
+      Inc(Guard);
+      var Growing:=Total<Target;
+
+      var Base:Single:=0;
+      for i:=0 to FColumns.Count-1 do begin
+        if Growing then begin
+          if FColData[i].Width<Hi[i] then Base:=Base+FColData[i].Width;
+        end else begin
+          if FColData[i].Width>Lo[i] then Base:=Base+FColData[i].Width;
+        end;
+      end;
+      if Base<=0 then Break; // nothing can move further; leave the remainder
+
+      var Delta:=Target-Total; // signed
+      var Applied:=0;
+      for i:=0 to FColumns.Count-1 do begin
+        var Cur:=FColData[i].Width;
+        if Growing then begin
+          if Cur>=Hi[i] then Continue;
+        end else begin
+          if Cur<=Lo[i] then Continue;
+        end;
+
+        var Chg:=Round(Delta*(Cur/Base));
+        if Chg=0 then Continue;
+        var NewW:=Cur+Chg;
+        if NewW>Hi[i] then NewW:=Hi[i];
+        if NewW<Lo[i] then NewW:=Lo[i];
+
+        FColData[i].Width:=NewW;
+        Applied:=Applied+(NewW-Cur);
+      end;
+
+      if Applied=0 then Break; // rounding stalled; exact fix-up below settles it
+      Total:=Total+Applied;
+    end;
+
+    // Exact residual fix-up: dump whatever pixels remain onto the first column
+    // that still has room in the needed direction, so the sum lands precisely
+    // on Target (or as close as the bounds allow).
+    if Total<>Target then begin
+      for i:=0 to FColumns.Count-1 do begin
+        var Cur:=FColData[i].Width;
+        var NewW:=Cur+(Target-Total);
+        if NewW>Hi[i] then NewW:=Hi[i];
+        if NewW<Lo[i] then NewW:=Lo[i];
+        if NewW<>Cur then begin
+          Total:=Total+(NewW-Cur);
+          FColData[i].Width:=NewW;
+          if Total=Target then Break;
+        end;
+      end;
+    end;
+
+    // Row heights depend on column widths under word wrap; invalidate their
+    // autosize flag so a subsequent AutoSizeRows re-measures.
+    for i:=0 to High(FRowData) do
+      if FRowData[i].AutoSized then FRowData[i].AutoSized:=False;
+
+    // Settle scrollbar visibility; if the vertical scrollbar toggled, VPW has
+    // changed and the next loop pass re-fits against it. If nothing changed the
+    // pass converges and the outer loop exits.
+    var PrevVPW:=VPW;
+    UpdateSize;
+    if ViewPortWidth=PrevVPW then Break;
   end;
 end;
 
@@ -4737,6 +4925,17 @@ begin
   inherited;
 
   UpdateSize;
+
+  // Keep columns filling the viewport as the grid is resized. UpdateSize above
+  // has already set scrollbar visibility, so ViewPortWidth is current here.
+  if FFitColumnsIntoView and not FInFitColumns and (FColumns.Count>0) then begin
+    FInFitColumns:=True;
+    try
+      FitColumnsToViewport(ViewPortWidth);
+    finally
+      FInFitColumns:=False;
+    end;
+  end;
 end;
 
 function TMultiHeaderGrid.RowAtHeightCoord(Y: Integer): integer;
@@ -5094,6 +5293,20 @@ begin
   if FKeepRowsAutoSized<>Value then begin
     FKeepRowsAutoSized:=Value;
     if Value then begin
+      Invalidate;
+    end;
+  end;
+end;
+
+procedure TMultiHeaderGrid.SetFitColumnsIntoView(const Value: Boolean);
+begin
+  if FFitColumnsIntoView<>Value then begin
+    FFitColumnsIntoView:=Value;
+    // Enabling it fills the current empty space right away (not only on the next
+    // resize / autosize), so the effect is immediate when set at runtime.
+    if Value and (FColumns.Count>0) and not (csLoading in ComponentState) then begin
+      FitColumnsToViewport(ViewPortWidth);
+      AutoSizeHeaders;
       Invalidate;
     end;
   end;
@@ -7380,11 +7593,12 @@ begin
         for var i:=0 to ColCount-1 do begin
           var Col:=Cols[i];
           if Col=nil then Continue;
-          if Col.MinWidth>0 then ColMinWidth[i]:=Col.MinWidth;
-          if Col.MaxWidth>0 then ColMaxWidth[i]:=Col.MaxWidth;
-          // When a column drops its limits (Min/Max back to 0), restore the
-          // permissive defaults so a previously clamped width can grow again.
-          if Col.MinWidth<=0 then ColMinWidth[i]:=0;
+          // Propagate bounds unconditionally: 0 means "no limit", so a column
+          // that drops a previously-set Min/MaxWidth pushes that 0 through and
+          // the clamp is lifted. Max first so the Min setter clamps against the
+          // new Max, not a stale one.
+          ColMaxWidth[i]:=Col.MaxWidth;
+          ColMinWidth[i]:=Col.MinWidth;
           ColWordWrap[i]:=Col.WordWrap;
           ColTextHAlignment[i]:=Col.Alignment;
           ColTextVAlignment[i]:=Col.VertAlignment;
