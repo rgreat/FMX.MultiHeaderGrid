@@ -1130,10 +1130,6 @@ type
       // 'HH:NN:SS'; datetime fields use DateFormat + ' ' + TimeFormat.
       FDateFormat: string;
       FTimeFormat: string;
-      // Signature of the DataSet/table we last auto-created columns for, so
-      // we only auto-create on a genuinely new source or a newly opened table
-      // (different field set), not on every re-open of the same one.
-      FLastAutoSig: string;
       // Signature of the column layout (ordered field names) realised by the
       // last ResetTable. When unchanged, a rebuild is a pure re-apply (e.g. a
       // Min/MaxWidth tweak) and live column widths are preserved instead of
@@ -1189,13 +1185,10 @@ type
     // Resolves the effective field list strictly from the Columns
     // collection (no fallback): an empty collection yields no columns.
     function ResolveColumns(out AFields: TArray<TField>): TArray<TMHGColumn>;
-    // A string that identifies the currently open dataset/table: the DataSet
-    // instance plus its field-name list. Changes when a different DataSet is
-    // assigned OR the same DataSet opens a different set of fields.
-    function DatasetSignature: string;
     // Called when the dataset becomes active. Auto-creates columns only when
-    // the grid has none AND this is a genuinely new source/table (a signature
-    // we have not auto-created for before), then rebuilds.
+    // the grid has none, or when the existing columns match none of the new
+    // dataset's fields (a different table/query), then rebuilds. Columns that
+    // match the current table are kept as configured.
     procedure HandleActiveChanged;
     // --- On-demand row helpers (native RecNo + live growth) ------------
     // True when the dataset fetches rows on demand, so RecordCount only counts
@@ -2137,9 +2130,11 @@ end;
 function TMultiHeaderGrid.FullTableWidth: Integer;
 begin
   Result:=round(FGridLineWidth/2);
-  for var i:=0 to FColumns.Count-1 do begin
+  // FColData tracks Columns.Count but is resized lazily by the rebuild path,
+  // so it can briefly be shorter (e.g. right after ColCount grows the
+  // collection, before the deferred rebuild runs). Bound by its actual length.
+  for var i:=0 to Length(FColData)-1 do
     Result:=Result+FColData[i].Width;
-  end;
 end;
 
 procedure TMultiHeaderGrid.SetColWidth(Index: Integer; const Value: Integer);
@@ -2539,7 +2534,7 @@ begin
         DrawHeaderCell(Canvas, i, j+Element.ColSkip);
       var ColSpan:=Element.ColSpan;
       if ColSpan<0 then ColSpan:=FColumns.Count-i;
-      j:=j+Element.ColSpan;
+      j:=j+ColSpan;
     end;
   end;
 end;
@@ -7275,17 +7270,40 @@ begin
     FCachedRowCount:=-1; // cache emptied; force the next UpdateRowCount to rebuild
     var DS:=DataSet;
     if (DS=nil) or (not DS.Active) then begin
-      // Closed: keep the current Columns and their header intact - a close is
-      // not a structural change. Just drop the data rows (no active dataset to
-      // read) and size internal geometry to match. Only when the grid has no
-      // columns at all do we show the component-name placeholder header.
       FColMap:=nil;
       EnsureColData;
-      if FColumns.Count=0 then begin
-        Header.Clear;
-        Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
+
+      // When no dataset is assigned at all, the header is driven purely by the
+      // Columns collection (design-time preview, or a runtime grid populated by
+      // code before any dataset is attached), so rebuild it on every add/remove.
+      // When a dataset IS assigned but merely inactive/closed, keep the existing
+      // field header intact - a plain close is not a structural change.
+      if (DS=nil) or (csDesigning in ComponentState) then begin
+        if FColumns.Count=0 then begin
+          Header.Clear;
+        end else begin
+          var Cols0: TArray<TMHGColumn>;
+          var Fields0: TArray<TField>;
+          SetLength(Cols0,FColumns.Count);
+          SetLength(Fields0,FColumns.Count);
+          for var i:=0 to FColumns.Count-1 do begin
+            Cols0[i]:=Columns[i];
+            Fields0[i]:=nil;   // no dataset: fields resolve to nil, cells show Title
+          end;
+          FLastColLayout:=''; // fresh build applies declared widths
+          BuildGroupedHeader(Fields0, Cols0);
+          for var i:=0 to High(Cols0) do begin
+            if not Cols0[i].Visible then
+              FColData[i].Width:=0
+            else if Cols0[i].Width>0 then
+              ColWidths[i]:=Cols0[i].Width;
+          end;
+          FCellTexts.Clear;
+          FCachedRowCount:=0;
+          UpdateSize;
+        end;
       end;
-      UpdateRowCount; // dataset closed -> RowCount:=0, cache cleared
+      UpdateRowCount; // no active dataset -> real (empty) record count, cache cleared
       Exit;
     end;
 
@@ -7297,7 +7315,6 @@ begin
     if ColCount=0 then begin
       FColMap:=nil;
       Header.Clear;
-      Header.AddRow.FillRow(IfThen(Name='',ClassName,Name));
       UpdateRowCount;
       Exit;
     end;
@@ -7489,30 +7506,6 @@ begin
   end;
 end;
 
-function TMultiHeaderDBGrid.DatasetSignature: string;
-begin
-  Result:='';
-  var DS:=DataSet;
-  if (DS=nil) or (not DS.Active) then Exit;
-
-  // DataSet instance identity (so a different DataSet object always differs)
-  // plus the ordered field-name list (so the same DataSet reopened against a
-  // different table/query - hence a different field set - also differs, while
-  // a plain close/reopen of the same table yields the same signature).
-  var SB:=TStringBuilder.Create;
-  try
-    SB.Append(IntToHex(NativeUInt(DS),SizeOf(Pointer)*2));
-    SB.Append('|');
-    for var i:=0 to DS.FieldCount-1 do begin
-      SB.Append(DS.Fields[i].FieldName);
-      SB.Append(';');
-    end;
-    Result:=SB.ToString;
-  finally
-    SB.Free;
-  end;
-end;
-
 procedure TMultiHeaderDBGrid.HandleActiveChanged;
 begin
   // A close or (re)open invalidates cached on-demand state.
@@ -7521,39 +7514,41 @@ begin
 
   if not ((DataSet<>nil) and DataSet.Active) then begin
     // Closed: keep the existing columns and header; ResetTable just drops the
-    // rows (or shows the placeholder if the grid has no columns at all).
+    // data rows.
     ResetTable;
     Exit;
   end;
 
   FFetchesOnDemand:=DataSetFetchesOnDemand(DataSet); // probe once per open
 
-  var Sig:=DatasetSignature;
-  // Auto-create columns only when there are none AND this is a source/table we
-  // have not auto-created for yet. This fills a fresh grid or a newly opened
-  // table, but never resurrects columns the user deleted on the same table.
-  if Sig<>FLastAutoSig then begin
-    FLastAutoSig:=Sig;
-    // The dataset structure changed (different table/query), so any existing
-    // columns were built against the OLD field set and are now meaningless:
-    // fields shared by both tables would otherwise keep their old (earlier)
-    // collection index and stay in front of the new table's columns. Clear
-    // them so AutoCreateColumns rebuilds in the NEW table's field order.
-    Columns.BeginUpdate;
-    try
-      Columns.Clear;
-    finally
-      Columns.EndUpdate;
+  // Decide whether the existing columns belong to THIS dataset. Columns from
+  // design time, code, or a prior open of the same table are authoritative and
+  // kept exactly as configured (widths, titles, alignment, grouping). Only an
+  // empty grid, or columns that match NONE of the current fields (i.e. a
+  // different table/query was opened), triggers auto-create.
+  var Keep:=False;
+  if Columns.Count>0 then
+    for var i:=0 to Columns.Count-1 do
+      if DataSet.FindField(Columns[i].FieldName)<>nil then begin
+        Keep:=True;
+        Break;
+      end;
+
+  if not Keep then begin
+    if Columns.Count>0 then begin
+      // Columns were built for a different field set - clear them so
+      // AutoCreateColumns rebuilds in the new table's field order.
+      Columns.BeginUpdate;
+      try
+        Columns.Clear;
+      finally
+        Columns.EndUpdate;
+      end;
     end;
     AutoCreateColumns; // rebuilds via the collection's Update -> ResetTable
-    // If the table genuinely had no visible fields, AutoCreateColumns adds
-    // nothing and no rebuild is triggered; ensure the grid is still reset.
-    if Columns.Count=0 then ResetTable;
-  end else begin
-    // Remember the current table so a later delete-all on it stays empty.
-    FLastAutoSig:=Sig;
-    ResetTable;
   end;
+
+  ResetTable; // reflect the open (idempotent if AutoCreateColumns already reset)
 end;
 
 procedure TMultiHeaderDBGrid.AutoCreateColumns;
@@ -8525,12 +8520,14 @@ end;
 
 function TMultiHeaderDBGrid.CellIsToggle(ACol, ARow: Integer): Boolean;
 begin
+  // Reports a cell that DISPLAYS as a checkbox (an ftBoolean field). This is a
+  // rendering test and is independent of read-only state - a read-only boolean
+  // still shows its checkbox; whether a click flips it is enforced in ToggleCell.
   Result:=False;
-  if FReadOnly then Exit;
   if (ACol<0) or (ARow<0) or (ARow>=FRowCount) then Exit;
 
   var Field:=FieldForCol(ACol);
-  Result:=(Field<>nil) and (EditorKindForField(Field)=ekCheckBox);
+  Result:=(Field<>nil) and (EditorKindForField(Field, True)=ekCheckBox);
 end;
 
 function TMultiHeaderDBGrid.ToggleCell(ACol, ARow: Integer): Boolean;
@@ -8554,6 +8551,7 @@ var
 
 begin
   Result:=False;
+  if FReadOnly then Exit;         // whole grid read-only: display only, no flip
   Field:=FieldForCol(ACol);
   if Field=nil then Exit;
   if Field.ReadOnly then Exit;
