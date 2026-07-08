@@ -171,13 +171,14 @@ object Form1: TForm1
         Size.Width = 1542.000000000000000000
         Size.Height = 432.000000000000000000
         Size.PlatformDefault = False
-        RowCount = 1
-        Col = 0
-        Row = 0
+        RowCount = 0
+        Col = -1
+        Row = -1
         DefaultColWidth = 80
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
+        ReadOnly = False
         WordWrap = True
         Columns = <
           item
@@ -253,6 +254,7 @@ object Form1: TForm1
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
+        ReadOnly = False
         Columns = <
           item
           end
@@ -301,6 +303,7 @@ object Form1: TForm1
         DefaultRowHeight = 20
         GridLineWidth = 1.000000000000000000
         CellColorAlternate = xFFEDFAFF
+        ReadOnly = False
         Columns = <
           item
           end
