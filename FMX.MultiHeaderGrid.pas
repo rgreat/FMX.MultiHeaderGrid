@@ -294,6 +294,10 @@ type
   TColumnsResizedEvent = procedure(Sender: TObject; StartRow, EndRow: integer) of object;
   TRowResizedEvent = procedure(Sender: TObject; ARow: Integer) of object;
   TGridScrollEvent = procedure(Sender: TObject; Left,Top: Integer) of object;
+  // Fired on a double-click. Handled is True by default: leave it True to
+  // suppress the grid's built-in double-click handling (opening the inplace
+  // editor); set it False to let the grid process the double-click as usual.
+  TGridDblClickEvent = procedure(Sender: TObject; var Handled: Boolean) of object;
   // Fired before a row is inserted/appended/deleted via the keyboard shortcuts
   // (Insert / Down-on-last-row / Ctrl+Del). Set Allow:=False to veto the change.
   TRowModifyEvent = procedure(Sender: TObject; ARow: Integer; var Allow: Boolean) of object;
@@ -339,6 +343,7 @@ type
       FOnSetCellStyle: TSetCellStyleEvent;
 
       FOnStartEditing: TStartEditingEvent;
+      FOnDblClick: TGridDblClickEvent;
       FOnCellClick: TNotifyEvent;
       FOnHeaderClick: TNotifyEvent;
 
@@ -843,7 +848,10 @@ type
     property TabStop;
     property Visible;
     property Width;
-    property OnDblClick;
+    // Double-click. Handled is True by default; leave it True to suppress the
+    // grid's built-in handling (opening the inplace editor), set it False to
+    // let the grid process the double-click normally.
+    property OnDblClick: TGridDblClickEvent read FOnDblClick write FOnDblClick;
     property OnResize;
     // --- Layer 1: events the grid does not intercept (fire natively) ---
     property OnEnter;
@@ -3656,6 +3664,8 @@ begin
     // CanWrapHdr   - any header element over this column allows word wrap.
     var CanWrapHdr:Boolean:=False;
 
+    FColData[i].ContentWidth:=0;
+
     if not IncreaseOnly then begin
       // Header Measurement
 
@@ -5843,14 +5853,18 @@ end;
 procedure TMultiHeaderGrid.PlaceEditorCaretAtEnd(Ed: TControl);
 begin
   // Only the base TMemo here; the DB grid overrides for its typed editors.
-  // Clear any inherited selection and put the caret at the end, keeping SelStart
-  // consistent with the caret so a fresh edit never starts with stale selection
-  // or a mismatched SelStart.
+  // Read-only cells (editor opened for copy only): select the whole text so it
+  // is highlighted ready to copy. Editable cells: caret at the end, no
+  // selection, with SelStart aligned to the caret.
   if Ed is TMemo then begin
     var M:=TMemo(Ed);
     M.GoToTextEnd;
-    M.SelLength:=0;
-    M.SelStart:=M.Text.Length; // align SelStart with the caret position
+    if CellIsModifiable(FEditCol, FEditRow) then begin
+      M.SelLength:=0;
+      M.SelStart:=M.Text.Length; // align SelStart with the caret position
+    end
+    else
+      M.SelectAll;
   end;
 end;
 
@@ -5919,8 +5933,11 @@ begin
     vkReturn:
       begin
         // Plain Enter commits and exits the editor. Enter with any modifier
-        // (Shift/Ctrl/Alt) inserts a line break instead.
-        var WantNewline:=(ssShift in Shift) or (ssCtrl in Shift) or (ssAlt in Shift);
+        // (Shift/Ctrl/Alt) inserts a line break instead - but only when the
+        // cell is actually editable. A read-only editor (opened for copy only)
+        // never inserts a break: any Enter just closes it.
+        var WantNewline:=((ssShift in Shift) or (ssCtrl in Shift) or (ssAlt in Shift))
+                         and CellIsModifiable(FEditCol, FEditRow);
         if WantNewline then begin
           // Modifier + Enter inserts a line break at the caret. SelText is
           // read-only in FMX, so compute the absolute caret offset from
@@ -6634,12 +6651,17 @@ end;
 
 procedure TMultiHeaderGrid.DblClick;
 begin
-  if not FLastClickIsOnCell then begin
-    inherited;
-    Exit;
+  // Fire the user event first. Handled defaults to True, so a handler that does
+  // nothing suppresses the grid's built-in double-click handling; the handler
+  // must set Handled:=False to let the grid process the click as usual. With no
+  // handler assigned the grid keeps its default behaviour.
+  if Assigned(FOnDblClick) then begin
+    var Handled:=True;
+    FOnDblClick(Self, Handled);
+    if Handled then Exit;
   end;
 
-  inherited;  // fires user OnDblClick (may show a modal)
+  if not FLastClickIsOnCell then Exit;
 
   // Start editing only if a cell is editable. Defer it so it runs after the
   // double-click sequence (and any modal dialog raised by a user OnDblClick
@@ -8482,8 +8504,26 @@ procedure TMultiHeaderDBGrid.DateTimeEditorKeyDown(Sender: TObject;
 //   - Right arrow on the date control's last part  -> first part of time control.
 //   - Left  arrow on the time control's first part -> last part of date control.
 // Tab/Shift+Tab also hop between the two halves before leaving the cell.
-// Everything else (Enter/Esc/normal editing) defers to the shared handler.
+// Everything else (Esc/normal editing) defers to the shared handler.
 begin
+  // Ctrl+C on a date/time (or composite datetime) editor copies the WHOLE cell
+  // value - both date and time - not just the half that currently has focus.
+  // Cells[] yields the field's fully formatted text for the edited cell.
+  if (Key=vkC) and (ssCtrl in Shift) then begin
+    CopyTextToClipboard(Cells[FEditCol, FEditRow]);
+    Key:=0; KeyChar:=#0;
+    Exit;
+  end;
+
+  // Enter closes the date/time editor WITHOUT committing: the picker controls
+  // don't distinguish "confirmed" from "still editing", so treat Enter as a
+  // plain close that leaves the field's data unchanged.
+  if Key=vkReturn then begin
+    CancelEditing;
+    Key:=0; KeyChar:=#0;
+    Exit;
+  end;
+
   if IsCompositeEditor(Sender) then begin
     case Key of
       vkRight:
@@ -8663,18 +8703,14 @@ procedure TMultiHeaderDBGrid.ApplyEditorReadOnly(Ed: TControl; AModifiable: Bool
 begin
   // TDateEdit / TTimeEdit are not TCustomEdit descendants, so handle them here;
   // everything else (memo, number edit, combo) goes through the base.
-  if Ed is TCustomDateEdit then
-    TCustomDateEdit(Ed).ReadOnly:=not AModifiable
-  else if Ed is TCustomTimeEdit then
-    TCustomTimeEdit(Ed).ReadOnly:=not AModifiable
-  else
+  //
+  // The FMX date/time pickers swallow keystrokes (including Enter) when their
+  // own ReadOnly is set, so Enter would never reach DateTimeEditorKeyDown to
+  // close the editor. We therefore leave the pickers key-live (do NOT set their
+  // ReadOnly); a read-only cell is still safe because CommitEditing only writes
+  // when CellIsModifiable, and Enter on a date/time editor cancels regardless.
+  if not ((Ed is TCustomDateEdit) or (Ed is TCustomTimeEdit)) then
     inherited;
-
-  // The ftDateTime composite opens the date control as the active editor but
-  // also shows the time control beside it; keep both in the same state.
-  if (Ed=FDateEditor) and (FTimeEditor<>nil) and
-     (FEditField<>nil) and (EditorKindForField(FEditField, True)=ekDateTime) then
-    FTimeEditor.ReadOnly:=not AModifiable;
 end;
 
 
@@ -8947,16 +8983,20 @@ begin
   // more to do here for them.
   if (Ed=FDateEditor) or (Ed=FTimeEditor) then Exit;
 
-  // The number editor (a plain TEdit) and any other TCustomEdit: caret to end,
-  // selection cleared, SelStart aligned to the caret. The combo box has no
-  // caret; fall back to the base for the shared TMemo (which also clears
-  // selection and aligns SelStart).
+  // The number editor (a plain TEdit) and any other TCustomEdit. Read-only
+  // cells (opened for copy only): select the whole text so it is highlighted
+  // ready to copy. Editable cells: caret at the end, no selection. The combo
+  // box has no caret; fall back to the base for the shared TMemo.
   if Ed is TCustomEdit then begin
     var E:=TCustomEdit(Ed);
     E.GoToTextEnd;
-    E.SelLength:=0;
-    E.CaretPosition:=E.Text.Length;
-    E.SelStart:=E.Text.Length; // keep SelStart consistent with the caret
+    if CellIsModifiable(FEditCol, FEditRow) then begin
+      E.SelLength:=0;
+      E.CaretPosition:=E.Text.Length;
+      E.SelStart:=E.Text.Length; // keep SelStart consistent with the caret
+    end
+    else
+      E.SelectAll;
   end else
     inherited;
 end;
