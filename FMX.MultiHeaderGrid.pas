@@ -2383,6 +2383,11 @@ end;
 
 procedure TMultiHeaderGrid.UpdateSize;
 begin
+  // Remember whether the vertical scrollbar was showing on entry. If this pass
+  // toggles it (e.g. data just loaded and now needs it), the viewport width has
+  // changed and a fit-to-view layout must be re-run against the new width.
+  var VScrollWasVisible:=VScrollBar.Visible;
+
   var VSize:=FullTableHeight;//+FGridLineWidth/2;
   var HSize:=FullTableWidth;
 
@@ -2437,6 +2442,20 @@ begin
     VScrollBar.Max:=1;
     VScrollBar.ViewportSize:=1;
     VScrollBar.Enabled:=False;
+  end;
+
+  // The vertical scrollbar just appeared or disappeared, so the viewport width
+  // changed. A fit-to-view layout sized to the old width would now over- or
+  // under-fill; re-fit against the new width. FInFitColumns guards against the
+  // fit's own UpdateSize calls re-entering here.
+  if FFitColumnsIntoView and not FInFitColumns and (FColumns.Count>0)
+     and (VScrollBar.Visible<>VScrollWasVisible) then begin
+    FInFitColumns:=True;
+    try
+      FitColumnsToViewport(ViewPortWidth);
+    finally
+      FInFitColumns:=False;
+    end;
   end;
 end;
 
@@ -4040,9 +4059,12 @@ begin
     if VPW<=0 then VPW:=AViewportW;
     if VPW<=0 then Exit;
 
-    // Target = viewport minus a 1px hair so a filled row never trips the
-    // horizontal scrollbar.
-    var Target:=VPW-1;
+    // Target is the COLUMN-SUM budget, not the viewport itself. FullTableWidth
+    // (what UpdateSize compares against the viewport to decide the H-scrollbar)
+    // is the column sum plus FGridLineWidth/2 of framing. Reserve that framing
+    // plus a 1px hair, so once the columns fill to Target the full table width
+    // lands just under the viewport and the horizontal scrollbar stays hidden.
+    var Target:=VPW-Ceil(FGridLineWidth/2)-1;
     if Target<=0 then Exit;
 
     // Per-column bounds. Lo[i] is the SHRINK floor: the largest of the 10px
