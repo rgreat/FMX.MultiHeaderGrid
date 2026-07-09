@@ -2555,7 +2555,7 @@ begin
         AutoSizeVisibleCols;
       end;
 
-      if FKeepRowsAutoSized and WordWrap then begin
+      if FKeepRowsAutoSized and GridHaveWordWrap then begin
         AutoSizeVisibleRows;
       end;
 
@@ -4359,9 +4359,13 @@ begin
     ToRow:=FRowCount-1;
   end;
 
-  if (FResizeStartColumnIndex<>-1) or (FResizeEndColumnIndex<>-1) then begin
-    TryOptimise:=False;
-  end;
+  // A row's height is the max over ALL its columns, so the per-row measurement
+  // below always spans every column. The passed column range only marks this as
+  // a drag-resize sweep: such a sweep must re-measure the rows it visits even if
+  // they are already flagged AutoSized (the resized column reflowed), whereas a
+  // plain optimise sweep skips already-sized rows.
+  var IsResizeSweep:=(FResizeStartColumnIndex<>-1) or (FResizeEndColumnIndex<>-1);
+  var SkipAlreadySized:=TryOptimise and (not IsResizeSweep);
 
   // Suppress on-demand fetching for the measurement sweep below: it iterates
   // every row, which on an on-demand cursor would force-fetch / mutate FRowData
@@ -4391,12 +4395,11 @@ begin
       ComputeMode:=TSizeComputeMode.cmFull;
     end;
 
-    if FResizeStartColumnIndex<0 then begin
-      FResizeStartColumnIndex:=0;
-    end;
-    if FResizeEndColumnIndex<0 then begin
-      FResizeEndColumnIndex:=FColumns.Count-1;
-    end;
+    // Height is always the max over every column, whether or not this is a
+    // resize sweep - measuring only the resized range would collapse a row whose
+    // height comes from a different (wrapped) column.
+    var FirstCol:=0;
+    var LastCol:=FColumns.Count-1;
 
     Canvas.Font.Assign(FCellFont);
     var TH:=Canvas.TextHeight('A');
@@ -4412,11 +4415,11 @@ begin
       if ((ToRow<0) and (Row>0) and (FRowData[Row-1].Top>ViewBottomCell)) or
          ((ViewBottomY<0) and (ToRow>=0) and (Row>ToRow)) then Break;
 
-      if TryOptimise and FRowData[Row].AutoSized then Continue;
+      if SkipAlreadySized and FRowData[Row].AutoSized then Continue;
 
       var MaxHeight:=TH;
 
-      for var Col:=FResizeStartColumnIndex to FResizeEndColumnIndex do begin
+      for var Col:=FirstCol to LastCol do begin
 
         var RowSpan:=1;
         var MergedCell: TMergedCell;
@@ -4487,7 +4490,7 @@ begin
           FRowData[Row].Top:=FRowData[Row-1].Top+FRowData[Row-1].Height;
         end;
       end;
-      if TryOptimise then begin
+      if TryOptimise or IsResizeSweep then begin
         FRowData[Row].AutoSized:=True;
       end;
     end;
@@ -4914,7 +4917,7 @@ begin
       // stale-geometry issue as visible-row autosizing). Size the rows spanning
       // the current top down through the target FIRST, so the scroll math uses
       // the final heights. Bounded to the moved-over range, so it stays cheap.
-      if FKeepRowsAutoSized and WordWrap and (not FEndJump) then begin
+      if FKeepRowsAutoSized and GridHaveWordWrap and (not FEndJump) then begin
         var TopRow:=RowAtHeightCoord(ViewTop);
         if TopRow<0 then TopRow:=0;
         if NewRow>=TopRow then
