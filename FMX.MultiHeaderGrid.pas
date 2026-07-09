@@ -273,11 +273,8 @@ type
 
   FColData = record
     Width          : integer;
-    // Content-fit width from the most recent AutoSizeCols pass. Used by
-    // FitColumnsToViewport as the shrink floor so the fill can grow columns to
-    // fill the viewport yet always shrink them back to their content width (and
-    // no further) when the viewport narrows.
     ContentWidth   : integer;
+    UserWidth      : integer;
     MinWidth       : integer;
     MaxWidth       : integer;
     TextVAlignment : TTextAlign;
@@ -308,6 +305,8 @@ type
 
   TMultiHeaderGrid = class(TControl)
   private
+    function FillText(Canvas: TCanvas; const ARect: TRectF; const AText: string; const WordWrap: Boolean; const AOpacity: Single;
+      const Flags: TFillTextFlags; const ATextAlign, AVTextAlign: TTextAlign): TRectF;
     type
       TRowData = packed record
         Top       : integer;
@@ -1425,7 +1424,7 @@ implementation
 
 uses
   System.SysUtils, System.Math, System.Rtti, FMX.Platform, FMX.Forms, System.StrUtils, FMX.Styles, FMX.Styles.Objects, FMX.DialogService.Sync,
-  System.DateUtils, System.Diagnostics;
+  System.DateUtils, System.Diagnostics, FMX.TextLayout;
 
 // Forward declarations for unit-local text helpers used by methods that
 // appear earlier in the implementation than the functions themselves.
@@ -1895,6 +1894,8 @@ begin
   SetLength(FColData,FColumns.Count);
   for i:=0 to FColumns.Count-1 do begin
     FColData[i].Width:=FDefaultColWidth;
+    FColData[i].ContentWidth:=0;
+    FColData[i].UserWidth:=0;
     FColData[i].TextVAlignment:=TTextAlign.Center;
     FColData[i].TextHAlignment:=TTextAlign.Leading;
     FColData[i].WordWrap:=False;
@@ -1973,6 +1974,8 @@ begin
   SetLength(FColData,FColumns.Count);
   for var i:=Old to FColumns.Count-1 do begin
     FColData[i].Width:=FDefaultColWidth;
+    FColData[i].ContentWidth:=0;
+    FColData[i].UserWidth:=0;
     FColData[i].TextVAlignment:=TTextAlign.Center;
     FColData[i].TextHAlignment:=TTextAlign.Leading;
     FColData[i].MinWidth:=0;
@@ -2188,12 +2191,13 @@ begin
     // matches the drag-resize paths, so no resize route can produce a sub-10
     // column.
     FColData[Index].Width:=Max(FColData[Index].Width,Max(10,FColData[Index].MinWidth));
-    // The clamped width becomes the column's content/shrink floor: a user drag
-    // or an external ColWidths[] write is an intended width, so FitColumnsToViewport
-    // must respect it (grow above it, shrink back to but not below it). The fill
-    // itself writes FColData[].Width directly and does NOT pass through here, so
-    // this never captures a fill-inflated width - no ratchet.
-    FColData[Index].ContentWidth:=FColData[Index].Width;
+    // The clamped width is an intended width: a user drag or an external
+    // ColWidths[] / Columns-collection write. Record it as UserWidth so
+    // FitColumnsToViewport respects it (grow above it, never shrink below it) -
+    // overriding the measured content width. ContentWidth is left to the
+    // autosize/draw path so it stays a true min-text-width. The fill itself
+    // writes FColData[].Width directly and does NOT pass through here, so this
+    // never captures a fill-inflated width - no ratchet.
     for var i:=0 to High(FRowData) do begin
       if FRowData[i].AutoSized then FRowData[i].AutoSized:=False;
     end;
@@ -2753,6 +2757,39 @@ begin
   end;
 end;
 
+function TMultiHeaderGrid.FillText(Canvas: TCanvas; const ARect: TRectF; const AText: string; const WordWrap: Boolean; const AOpacity: Single;
+  const Flags: TFillTextFlags; const ATextAlign, AVTextAlign: TTextAlign): TRectF;
+var
+  Layout: TTextLayout;
+begin
+  if AText.IsEmpty then
+  begin
+    Result.Right := ARect.Left;
+    Result.Bottom := ARect.Top;
+    Exit;
+  end;
+
+  Layout := TTextLayoutManager.TextLayoutByCanvas(Canvas.ClassType).Create(Canvas);
+  try
+    Layout.BeginUpdate;
+    Layout.TopLeft := ARect.TopLeft;
+    Layout.MaxSize := PointF(ARect.Width, ARect.Height);
+    Layout.Text := AText;
+    Layout.WordWrap := WordWrap;
+    Layout.Opacity := AOpacity;
+    Layout.HorizontalAlign := ATextAlign;
+    Layout.VerticalAlign := AVTextAlign;
+    Layout.Font := Canvas.Font;
+    Layout.Color := Canvas.Fill.Color;
+    Layout.RightToLeft := TFillTextFlag.RightToLeft in Flags;
+    Layout.EndUpdate;
+    Layout.RenderLayout(Canvas);
+    Result := Layout.TextRect;
+  finally
+    FreeAndNil(Layout);
+  end;
+end;
+
 procedure TMultiHeaderGrid.DrawCell(Canvas: TCanvas; ACol, ARow: Integer; ARect: TRectF);
 var
   Handled         : Boolean;
@@ -2923,7 +2960,14 @@ begin
     end;
 
     // Changed: added the WordWrapEnabled parameter
-    Canvas.FillText(ARect, Text, WordWrapEnabled, 1, [], HAlignment, VAlignment);
+    var TextRect:=FillText(Canvas, ARect, Text, WordWrapEnabled, 1, [], HAlignment, VAlignment);
+
+    if not WordWrapEnabled then begin
+      var TextW:=Ceil(TextRect.Width + CellPadding.Left + CellPadding.Right + FGridLineWidth/2 + 1);
+      if FColData[ACol].ContentWidth<TextW then begin
+        FColData[ACol].ContentWidth:=TextW;
+      end;
+    end;
   end;
 end;
 
@@ -3294,6 +3338,21 @@ begin
   end;
 
   UpdateSize;
+
+  // Column widths were just (re)applied from the collection; if the grid fills
+  // the viewport, re-run the fill so the edited widths still stretch to fill
+  // instead of leaving a gap or overflow. Guarded against the fit's own
+  // UpdateSize re-entering here.
+  if FFitColumnsIntoView and not FInFitColumns and (FColumns.Count>0) then begin
+    FInFitColumns:=True;
+    try
+      FitColumnsToViewport(ViewPortWidth);
+      AutoSizeHeaders;
+    finally
+      FInFitColumns:=False;
+    end;
+  end;
+
   Invalidate;
 end;
 
@@ -3684,6 +3743,10 @@ begin
     var CanWrapHdr:Boolean:=False;
 
     FColData[i].ContentWidth:=0;
+    // A full autosize re-derives widths from content; drop any stale manual
+    // (drag/collection) override so the fit floor follows the fresh content.
+    // IncreaseOnly passes (AutoSizeVisibleCols during lazy paging) must keep it.
+    if not IncreaseOnly then FColData[i].UserWidth:=0;
 
     if not IncreaseOnly then begin
       // Header Measurement
@@ -3939,7 +4002,9 @@ begin
   // viewport narrows again. Without this snapshot the fill would read the already
   // grown width and ratchet - never shrinking back.
   for i:=0 to FColumns.Count-1 do
-    FColData[i].ContentWidth:=FColData[i].Width;
+    if ColIsWrapped[i]
+      then FColData[i].ContentWidth:=Ceil(Max(FColData[i].Width, ColWordFloor[i]))
+      else FColData[i].ContentWidth:=Ceil(Max(FColData[i].Width, ColNaturalW[i]));
 
   // Stretch columns to fill the viewport when requested. Runs LAST so it is the
   // authoritative final word on widths - header balancing above may have grown
@@ -4075,7 +4140,11 @@ begin
     var Lo: TArray<Integer>; SetLength(Lo, FColumns.Count);
     var Hi: TArray<Integer>; SetLength(Hi, FColumns.Count);
     for i:=0 to FColumns.Count-1 do begin
-      Lo[i]:=Max(Max(10,FColData[i].MinWidth),Max(10,FColData[i].ContentWidth));
+      // Shrink floor: a user-set width (drag / collection) overrides the
+      // measured content width when present; otherwise use the content width.
+      var Floor:=FColData[i].ContentWidth;
+      if FColData[i].UserWidth>0 then Floor:=FColData[i].UserWidth;
+      Lo[i]:=Max(Max(10,FColData[i].MinWidth),Max(10,Floor));
       Hi[i]:=FColData[i].MaxWidth;
       if Hi[i]<=0 then Hi[i]:=MaxInt;
       if Lo[i]>Hi[i] then Lo[i]:=Hi[i]; // explicit MaxWidth below content wins
@@ -4725,6 +4794,21 @@ begin
       if WasColumnResize and GridHaveWordWrap then begin
         AutoSizeVisibleRows(FResizeStartColumnIndex, FResizeEndColumnIndex);
         UpdateSize;
+      end;
+
+      // The drag set one column's width (SetColWidth snapshotted it as the
+      // content/shrink floor). If the grid fills the viewport, reconcile the
+      // remaining columns to the viewport width now that the drag is done -
+      // here on MouseUp, not during MouseMove, so it does not fight the drag.
+      if WasColumnResize and FFitColumnsIntoView and not FInFitColumns
+         and (FColumns.Count>0) then begin
+        FInFitColumns:=True;
+        try
+          FitColumnsToViewport(ViewPortWidth);
+          AutoSizeHeaders;
+        finally
+          FInFitColumns:=False;
+        end;
       end;
 
       FResizeStartColumnIndex:=-1;
@@ -6553,8 +6637,12 @@ begin
   end;
 
   // Commit.
-  for i:=0 to GroupColCount-1 do
+  for i:=0 to GroupColCount-1 do begin
     ColWidths[StartCol+i]:=Widths[i];
+  end;
+  for i:=0 to GroupColCount-1 do begin
+    FColData[StartCol+i].UserWidth:=ColWidths[StartCol+i];
+  end;
 
   Invalidate;
   if Assigned(HScrollBar) then
@@ -6573,6 +6661,7 @@ begin
     end;
 
     ColWidths[EndCol]:=NewWidth;
+    FColData[EndCol].UserWidth:=ColWidths[EndCol];
 
     Invalidate;
 

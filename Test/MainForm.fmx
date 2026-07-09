@@ -79,12 +79,12 @@ object Form1: TForm1
       OnClick = ButtonBenchmarkClick
     end
     object RowSelectCheckBox: TCheckBox
-      Position.X = 545.000000000000000000
-      Position.Y = 8.000000000000000000
+      Position.X = 653.000000000000000000
+      Position.Y = 9.000000000000000000
       Size.Width = 88.000000000000000000
       Size.Height = 19.000000000000000000
       Size.PlatformDefault = False
-      TabOrder = 10
+      TabOrder = 11
       Text = 'Row Select'
       OnChange = RowSelectCheckBoxChange
     end
@@ -98,25 +98,12 @@ object Form1: TForm1
       Text = 'Fill Cells'
       OnClick = ButtonFillCellsClick
     end
-    object WordWrapCheckBox: TCheckBox
-      Hint = 'AutoSize would be slow!'
-      Position.X = 633.000000000000000000
-      Position.Y = 8.000000000000000000
-      Size.Width = 88.000000000000000000
-      Size.Height = 19.000000000000000000
-      Size.PlatformDefault = False
-      TabOrder = 9
-      Text = 'Word Wrap'
-      ParentShowHint = False
-      ShowHint = True
-      OnChange = WordWrapCheckBoxChange
-    end
     object LineWidthEdit: TEdit
       Touch.InteractiveGestures = [LongTap, DoubleTap]
       TabOrder = 4
       Text = '0'
       TextSettings.HorzAlign = Center
-      Position.X = 785.000000000000000000
+      Position.X = 602.000000000000000000
       Position.Y = 7.000000000000000000
       Size.Width = 46.000000000000000000
       Size.Height = 22.000000000000000000
@@ -124,13 +111,38 @@ object Form1: TForm1
       OnChange = LineWidthEditChange
     end
     object Label2: TLabel
-      Position.X = 728.000000000000000000
+      Position.X = 545.000000000000000000
       Position.Y = 10.000000000000000000
       Size.Width = 57.000000000000000000
       Size.Height = 17.000000000000000000
       Size.PlatformDefault = False
       Text = 'LineWidth'
       TabOrder = 5
+    end
+    object WordWrapCheckBox: TCheckBox
+      Hint = 'AutoSize would be slow!'
+      Position.X = 736.000000000000000000
+      Position.Y = 9.000000000000000000
+      Size.Width = 88.000000000000000000
+      Size.Height = 19.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 10
+      Text = 'Word Wrap'
+      ParentShowHint = False
+      ShowHint = True
+      OnChange = WordWrapCheckBoxChange
+    end
+    object ReadOnlyCheckBox: TCheckBox
+      Position.X = 823.000000000000000000
+      Position.Y = 9.000000000000000000
+      Size.Width = 88.000000000000000000
+      Size.Height = 19.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 9
+      Text = 'Read Only'
+      ParentShowHint = False
+      ShowHint = True
+      OnChange = ReadOnlyCheckBoxChange
     end
   end
   object TabControl1: TTabControl
@@ -291,7 +303,6 @@ object Form1: TForm1
           Size.PlatformDefault = False
           TabOrder = 0
           Text = 'Delete Row'
-          OnClick = ButtonDeleteRowClick
         end
         object LimitWidthsCheckBox: TCheckBox
           Position.X = 155.000000000000000000
@@ -421,12 +432,12 @@ object Form1: TForm1
   object CDS: TClientDataSet
     Aggregates = <>
     Params = <>
-    Left = 404
+    Left = 772
     Top = 42
   end
   object DS: TDataSource
     DataSet = CDS
-    Left = 431
+    Left = 799
     Top = 42
   end
 end

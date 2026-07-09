@@ -30,7 +30,6 @@ type
     Grid3: TMultiHeaderDBGrid;
     RowSelectCheckBox: TCheckBox;
     ButtonFillCells: TButton;
-    WordWrapCheckBox: TCheckBox;
     TabDBGrid: TTabItem;
     CDS: TClientDataSet;
     DS: TDataSource;
@@ -40,6 +39,8 @@ type
     LimitWidthsCheckBox: TCheckBox;
     LineWidthEdit: TEdit;
     Label2: TLabel;
+    WordWrapCheckBox: TCheckBox;
+    ReadOnlyCheckBox: TCheckBox;
     procedure FormCreate(Sender: TObject);
     procedure ButtonMergeCellsClick(Sender: TObject);
     procedure ButtonAutoSizeClick(Sender: TObject);
@@ -60,11 +61,11 @@ type
     procedure GridDblClick(Sender: TObject);
     procedure WordWrapCheckBoxChange(Sender: TObject);
     procedure LimitWidthsCheckBoxChange(Sender: TObject);
-    procedure ButtonDeleteRowClick(Sender: TObject);
     procedure ButtonAddRowClick(Sender: TObject);
     procedure TabControl1Change(Sender: TObject);
     procedure FormShow(Sender: TObject);
     procedure LineWidthEditChange(Sender: TObject);
+    procedure ReadOnlyCheckBoxChange(Sender: TObject);
   private
     Grid1CellTexts: array of array of string;
     Grid1CellStyles: array of array of TCellStyle;
@@ -321,6 +322,11 @@ begin
   Columns.SetColumnProps('cor_time', 'Time',                  'Correction').DisplayFormat:='DD.MM.YYYY HH:NN';
   Columns.SetColumnProps('test_time', 'Test Time');
 
+  var NumRow:=Grid.Header.AddRow;
+  for var i:=0 to Columns.Count-1 do begin
+    NumRow.AddColumn((i+1).ToString);
+  end;
+
   for var Column in Columns do begin
     var HMGColumn:=TMHGColumn(Column);
     var Field:=Grid.DataSet.FindField(HMGColumn.FieldName);
@@ -412,11 +418,6 @@ begin
   CDS.Post;
 end;
 
-procedure TForm1.ButtonDeleteRowClick(Sender: TObject);
-begin
-  CDS.Delete;
-end;
-
 procedure TForm1.ButtonBenchmarkClick(Sender: TObject);
 begin
   var Grid:=ActiveGrid;
@@ -459,6 +460,8 @@ begin
 
   RowSelectCheckBox.IsChecked:=Grid.RowSelect;
   WordWrapCheckBox.IsChecked:=Grid.WordWrap;
+  ReadOnlyCheckBox.IsChecked:=Grid.ReadOnly;
+
   RowCountEdit.Text:=Grid.RowCount.ToString;
   LineWidthEdit.Text:=Grid.GridLineWidth.ToString;
   RowCountEdit.Enabled:=not (Grid is TMultiHeaderDBGrid);
@@ -478,9 +481,15 @@ end;
 procedure TForm1.LineWidthEditChange(Sender: TObject);
 begin
   var Grid:=ActiveGrid;
-
   Grid.GridLineWidth:=StrToFloatDef(LineWidthEdit.Text,Grid.GridLineWidth);
 end;
+
+procedure TForm1.ReadOnlyCheckBoxChange(Sender: TObject);
+begin
+  var Grid:=ActiveGrid;
+  Grid.ReadOnly:=ReadOnlyCheckBox.IsChecked;
+end;
+
 
 // ---------------------------------------------------------
 // -------------------- Grid Events ------------------------
